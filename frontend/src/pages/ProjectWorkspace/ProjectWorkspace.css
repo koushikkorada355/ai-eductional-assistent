@@ -1,0 +1,4 @@
+.workspace { display: flex; flex-direction: column; gap: 14px; }
+.tabs { display: flex; gap: 8px; }
+.tabs button { padding: 9px 14px; border-radius: 8px; border: 1px solid var(--border); background: #fff; cursor: pointer; }
+.tabs button.active { background: var(--primary); color: #fff; border-color: var(--primary); }

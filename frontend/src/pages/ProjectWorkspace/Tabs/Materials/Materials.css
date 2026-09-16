@@ -1,0 +1,10 @@
+.dropzone { border: 2px dashed var(--border); border-radius: 12px; padding: 28px; text-align: center; background: #fff; cursor: pointer; }
+.dropzone.drag { border-color: var(--primary); background: #eef3ff; }
+.hint { color: var(--muted); font-size: 13px; }
+.doc-list { display: flex; flex-direction: column; gap: 8px; }
+.doc-row { display: flex; justify-content: space-between; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.status { font-size: 12px; padding: 3px 8px; border-radius: 99px; text-transform: capitalize; }
+.status.queued { background: #fef3c7; }
+.status.processing { background: #dbeafe; }
+.status.ready { background: #dcfce7; }
+.status.failed { background: #fee2e2; }

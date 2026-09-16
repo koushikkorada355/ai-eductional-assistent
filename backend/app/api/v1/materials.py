@@ -1,5 +1,6 @@
 import os
 import uuid
+from typing import List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from app.db.session import get_db
@@ -12,6 +13,14 @@ from app.tasks.document_tasks import process_document_task
 router = APIRouter()
 
 UPLOAD_DIR = "uploads"
+
+
+@router.get("/{project_id}/documents", response_model=List[DocumentOut])
+def list_documents(
+    project: Project = Depends(get_owned_project),
+    db: Session = Depends(get_db),
+):
+    return db.query(Document).filter(Document.project_id == project.id).order_by(Document.created_at.desc()).all()
 
 
 @router.post("/{project_id}/upload-pdf", response_model=DocumentOut)

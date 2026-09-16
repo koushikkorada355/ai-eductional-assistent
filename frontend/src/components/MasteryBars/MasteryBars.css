@@ -1,0 +1,6 @@
+.mastery-list { display: flex; flex-direction: column; gap: 10px; }
+.mastery-row { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.mastery-label { display: flex; justify-content: space-between; font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.mastery-track { height: 8px; background: #eef2f9; border-radius: 99px; overflow: hidden; }
+.mastery-fill { height: 100%; background: var(--primary); border-radius: 99px; }
+.muted { color: var(--muted); }

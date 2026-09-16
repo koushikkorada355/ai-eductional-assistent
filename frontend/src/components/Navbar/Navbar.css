@@ -1,0 +1,10 @@
+.navbar {
+  height: 60px; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 20px; background: #fff; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 10;
+}
+.navbar-brand { font-weight: 800; cursor: pointer; }
+.profile-wrap { position: relative; }
+.profile-btn { border: 1px solid var(--border); background: #fff; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+.profile-menu { position: absolute; right: 0; top: 40px; background: #fff; border: 1px solid var(--border); border-radius: 8px; min-width: 140px; box-shadow: 0 8px 24px rgba(0,0,0,.08); }
+.profile-menu button { width: 100%; padding: 10px; border: 0; background: none; cursor: pointer; text-align: left; }

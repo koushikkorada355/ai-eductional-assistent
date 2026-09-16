@@ -1,0 +1,7 @@
+.auth-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+.auth-card { background: #fff; padding: 28px; border-radius: 12px; width: 360px; border: 1px solid var(--border); }
+.auth-card form { display: flex; flex-direction: column; gap: 10px; }
+.auth-card input { padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.auth-card button[type="submit"] { background: var(--primary); color: #fff; border: 0; border-radius: 8px; padding: 10px; cursor: pointer; }
+.auth-error { color: var(--danger); font-size: 13px; }
+.link { background: none; border: 0; color: var(--primary); cursor: pointer; margin-top: 10px; }

@@ -1,0 +1,26 @@
+.sidebar { width: 260px; background: #fff; border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; }
+.sidebar-head h4 { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.sidebar-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.sidebar-head h4 { margin: 0; }
+.mini-btn { border: 1px solid var(--border); background: #fff; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; }
+.mini-btn:hover { border-color: var(--primary); color: var(--primary); }
+.inline-form { display: flex; gap: 6px; margin-bottom: 8px; }
+.inline-form.stacked { flex-direction: column; }
+.inline-form input { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+.inline-form button { padding: 7px 10px; border-radius: 6px; border: 0; background: var(--primary); color: #fff; cursor: pointer; font-size: 13px; }
+.inline-form button.ghost { background: none; color: var(--muted); }
+.space-row, .project-row { display: flex; align-items: center; gap: 4px; }
+.space-row .space-name, .project-row .project-link { flex: 1; min-width: 0; }
+.row-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; }
+.space-row:hover .row-actions, .project-row:hover .row-actions { opacity: 1; }
+.row-actions button { border: 0; background: none; cursor: pointer; font-size: 13px; padding: 2px 4px; }
+.space-block { margin-bottom: 14px; }
+.space-name { font-weight: 700; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; cursor: pointer; font-size: 14px; padding: 2px 0; text-align: left; }
+.caret { display: inline-block; transition: transform 0.15s; color: var(--muted); font-size: 12px; }
+.caret.open { transform: rotate(90deg); }
+.project-list { display: flex; flex-direction: column; gap: 4px; }
+.project-link { text-align: left; border: 0; background: #f2f5fd; border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.project-link:hover { background: #e4ebff; }
+.project-link.active { background: var(--primary); color: #fff; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; padding-left: 4px; }

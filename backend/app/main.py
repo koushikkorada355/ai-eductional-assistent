@@ -11,6 +11,8 @@ from app.api.v1.spaces import router as spaces_router
 from app.api.v1.projects import router as projects_router
 from app.api.v1.tutor import router as tutor_router
 from app.api.v1.materials import router as materials_router
+from app.api.v1.quiz import router as quiz_router
+from app.api.v1.quiz_flat import router as quiz_flat_router
 
 # 1. Configure Logger
 logger.remove()
@@ -53,12 +55,24 @@ async def lifespan(app: FastAPI):
 # 3. Initialize FastAPI
 app = FastAPI(title="AI Study Companion Backend", lifespan=lifespan)
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # 4. Include Routers
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(spaces_router, prefix="/api/v1/spaces", tags=["Spaces"])
 app.include_router(projects_router, prefix="/api/v1/spaces/{space_id}/projects", tags=["Projects"])
 app.include_router(tutor_router, prefix="/api/v1/spaces/{space_id}/projects", tags=["Tutor"])
 app.include_router(materials_router, prefix="/api/v1/spaces/{space_id}/projects", tags=["Materials"])
+app.include_router(quiz_router, prefix="/api/v1/spaces/{space_id}/projects", tags=["Quiz"])
+app.include_router(quiz_flat_router, prefix="/api/v1", tags=["Quiz"])
 
 @app.get("/health")
 async def health_check():

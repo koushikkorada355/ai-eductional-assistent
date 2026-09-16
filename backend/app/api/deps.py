@@ -63,3 +63,36 @@ def get_owned_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found in this space")
     return project
+
+def get_owned_project_by_id(
+    project_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Project:
+    # Flat-route ownership check: project -> parent space -> owner (same pattern as above)
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    space = db.query(Space).filter(Space.id == project.space_id).first()
+    if not space or space.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this project")
+    return project
+
+def get_owned_quiz(
+    quiz_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Flat-route ownership check: quiz -> project -> parent space -> owner
+    from app.db.models.assessment import Quiz
+
+    quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    project = db.query(Project).filter(Project.id == quiz.project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    space = db.query(Space).filter(Space.id == project.space_id).first()
+    if not space or space.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this quiz")
+    return quiz

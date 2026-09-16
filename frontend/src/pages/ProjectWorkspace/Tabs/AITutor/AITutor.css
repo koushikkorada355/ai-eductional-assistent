@@ -1,0 +1,9 @@
+.tutor { display: flex; flex-direction: column; gap: 12px; }
+.chat-list { display: flex; flex-direction: column; gap: 8px; min-height: 300px; }
+.bubble { max-width: 75%; padding: 10px 12px; border-radius: 12px; background: #fff; border: 1px solid var(--border); }
+.bubble.user { align-self: flex-end; background: var(--primary); color: #fff; border-color: var(--primary); }
+.bubble.assistant { align-self: flex-start; }
+.citation { display: inline-block; background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 6px; padding: 1px 6px; margin: 2px; font-size: 12px; }
+.chat-input { display: flex; gap: 8px; }
+.chat-input input { flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--border); }
+.chat-input button { background: var(--primary); color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; }

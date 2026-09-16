@@ -51,6 +51,12 @@ def process_document_task(document_id: str) -> str:
         document.status = "ready"
         db.commit()
         logger.success(f"Document {document_id} ready with {len(chunks)} chunks")
+        try:
+            from app.tasks.concept_tasks import extract_concepts_task
+
+            extract_concepts_task.delay(str(document.id))
+        except Exception as ce:
+            logger.warning(f"Concept extraction dispatch failed for {document_id}: {ce}")
         return f"ready:{len(chunks)}"
     except Exception as e:
         db.rollback()
