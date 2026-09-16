@@ -1,20 +1,18 @@
 import json
 import random
+import re
 import uuid
 from datetime import datetime
 from loguru import logger
-from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from app.ai.state import QuizState
 from app.ai.llm import get_llm
 from app.config import settings
 from app.db.session import SessionLocal
 import app.db.base  # noqa: F401
-from app.db.models.assessment import Concept, Quiz, QuizQuestion
+from app.db.models.assessment import Concept, QuizQuestion
 from app.db.models.document import DocumentChunk
-from app.schemas.quiz import MCQQuestion, OpenEndedEvaluation
-from app.db.checkpointer import checkpointer
+from app.schemas.quiz import MCQQuestion
 
 MAX_QUESTIONS = 5
 
@@ -61,6 +59,25 @@ def _rag_context(db, project_id: str, query: str, limit: int = 5) -> str:
         return ""
 
 
+def _repair_mcq(validated: "MCQQuestion") -> tuple:
+    """Ensure correct_answer is the full option text, not just a letter.
+
+    LLMs often return 'B' while options are full strings like 'B) ...'.
+    Map a lone-letter answer to its option so grading display stays useful.
+    """
+    if validated.correct_answer in validated.options:
+        return validated.question_text, validated.options, validated.correct_answer
+    key = (validated.correct_answer or "").strip()
+    m = re.match(r"^([A-Za-z])[\s).:\-]*$", key)
+    if m:
+        letter = m.group(1).upper()
+        for opt in validated.options:
+            stripped = (opt or "").lstrip()
+            if len(stripped) > 1 and stripped[0].upper() == letter and not stripped[1].isalnum():
+                return validated.question_text, validated.options, opt
+    raise ValueError(f"correct_answer {validated.correct_answer!r} does not match any option")
+
+
 def _craft_question(concept: str, context: str, qtype: str) -> tuple:
     """Returns (question_text, options, correct_answer). Falls back deterministically."""
     llm = get_llm()
@@ -71,15 +88,16 @@ def _craft_question(concept: str, context: str, qtype: str) -> tuple:
                     [
                         SystemMessage(
                             content="Generate a multiple-choice question strictly about the target concept, "
-                            "grounded in the context. Return ONLY JSON: "
-                            '{"question_text": "...", "options": ["A","B","C","D"], "correct_answer": "..."}.'
+                            "grounded in the context. Options must be full answer texts WITHOUT letter prefixes "
+                            "(no 'A.', 'B)' etc). Return ONLY JSON: "
+                            '{"question_text": "...", "options": ["full text 1","full text 2","full text 3","full text 4"], "correct_answer": "<one of the options copied EXACTLY>"}.'
                         ),
                         HumanMessage(content=f"Concept: {concept}\nContext:\n{context}"),
                     ]
                 )
                 raw = res.content.strip().replace("```json", "").replace("```", "").strip()
                 validated = MCQQuestion(**json.loads(raw))
-                return validated.question_text, validated.options, validated.correct_answer
+                return _repair_mcq(validated)
             res = llm.invoke(
                 [
                     SystemMessage(
@@ -144,44 +162,79 @@ def select_concepts_for_goal(project_id: str, goal: str, n: int) -> list:
         db.close()
 
 
-def generate_quiz_batch(project_id: str, quiz_id: str, goal: str, n: int) -> list:
-    """Generate N distinct grounded questions upfront. Returns question-id strings."""
-    concepts = select_concepts_for_goal(project_id, goal or "", n)
+def _fallback_mcq(concept: str, context: str) -> tuple:
+    """Deterministic MCQ so MCQ-only quizzes work even when the LLM fails."""
+    snippet = (context[:160] + "...") if context else "your uploaded materials"
+    correct = f"The core definition and purpose of '{concept}'"
+    return (
+        f"Which statement best describes '{concept}'? Use: {snippet}",
+        [
+            correct,
+            f"An unrelated concept with no link to '{concept}'",
+            f"A common misconception about '{concept}'",
+            f"A partially true but incomplete idea about '{concept}'",
+        ],
+        correct,
+    )
+
+
+def _persist_batch_question(db, quiz_id: str, concept, qtype: str, text: str, options, correct) -> str:
+    """Idempotent insert (reuses duplicate question text). Returns question-id string."""
+    exists = (
+        db.query(QuizQuestion)
+        .filter(QuizQuestion.quiz_id == _pid(quiz_id), QuizQuestion.question_text == text)
+        .first()
+    )
+    if exists:
+        return str(exists.id)
+    qq = QuizQuestion(
+        quiz_id=_pid(quiz_id),
+        concept_id=concept.id,
+        question_type=qtype,
+        question_text=text,
+        options=options,
+        correct_answer=correct,
+    )
+    db.add(qq)
+    db.flush()
+    return str(qq.id)
+
+
+def generate_quiz_batch(project_id: str, quiz_id: str, goal: str, num_mcq: int, num_open: int = 0) -> list:
+    """Generate a custom split of grounded questions upfront. Returns question-id strings.
+
+    num_mcq: how many multiple-choice questions. num_open: how many open-ended.
+    Total must be 1-10. Concepts are round-robined across both groups.
+    """
+    num_mcq, num_open = max(0, int(num_mcq)), max(0, int(num_open))
+    total = num_mcq + num_open
+    if total < 1 or total > 10:
+        raise ValueError("Total questions (MCQs + open-ended) must be between 1 and 10")
+    concepts = select_concepts_for_goal(project_id, goal or "", total)
     if not concepts:
         raise ValueError("No concepts found. Upload PDFs first.")
     db = SessionLocal()
     try:
         goal_context = _rag_context(db, project_id, goal or concepts[0].name)
         ids: list[str] = []
-        for i in range(n):
-            concept = concepts[i % len(concepts)]
-            qtype = "multiple_choice" if i % 2 == 0 else "open_ended"
+        idx = 0
+        for _ in range(num_mcq):
+            concept = concepts[idx % len(concepts)]
+            idx += 1
             context = _rag_context(db, project_id, concept.name) or goal_context
-            text, options, correct = _craft_question(concept.name, context, qtype)
-            if qtype == "multiple_choice" and (not options or not correct):
-                text, options, correct = _craft_question(concept.name, context, "open_ended")
-                qtype = "open_ended"
-            exists = (
-                db.query(QuizQuestion)
-                .filter(QuizQuestion.quiz_id == _pid(quiz_id), QuizQuestion.question_text == text)
-                .first()
-            )
-            if exists:
-                ids.append(str(exists.id))
-                continue
-            qq = QuizQuestion(
-                quiz_id=_pid(quiz_id),
-                concept_id=concept.id,
-                question_type=qtype,
-                question_text=text,
-                options=options,
-                correct_answer=correct,
-            )
-            db.add(qq)
-            db.flush()
-            ids.append(str(qq.id))
+            text, options, correct = _craft_question(concept.name, context, "multiple_choice")
+            if not options or not correct:
+                # Strict MCQ count: deterministic fallback instead of switching type.
+                text, options, correct = _fallback_mcq(concept.name, context)
+            ids.append(_persist_batch_question(db, quiz_id, concept, "multiple_choice", text, options, correct))
+        for _ in range(num_open):
+            concept = concepts[idx % len(concepts)]
+            idx += 1
+            context = _rag_context(db, project_id, concept.name) or goal_context
+            text, options, correct = _craft_question(concept.name, context, "open_ended")
+            ids.append(_persist_batch_question(db, quiz_id, concept, "open_ended", text, options, correct))
         db.commit()
-        logger.success(f"[quiz.batch] quiz={quiz_id} generated {len(ids)} questions")
+        logger.success(f"[quiz.batch] quiz={quiz_id} generated {len(ids)} questions ({num_mcq} MCQ + {num_open} open)")
         return ids
     finally:
         db.close()
@@ -366,19 +419,3 @@ def route_loop(state: dict) -> str:
     if asked >= MAX_QUESTIONS:
         return "end"
     return "assess_mastery"
-
-
-workflow = StateGraph(QuizState)
-workflow.add_node("assess_mastery", assess_mastery)
-workflow.add_node("generate_question", generate_question)
-workflow.add_node("evaluate_answer", evaluate_answer)
-workflow.add_node("update_mastery", update_mastery)
-workflow.add_node("quiz_error", quiz_error)
-workflow.add_edge(START, "assess_mastery")
-workflow.add_conditional_edges("assess_mastery", route_after_assess)
-workflow.add_edge("generate_question", END)  # interrupt: return question to user
-workflow.add_edge("evaluate_answer", "update_mastery")
-workflow.add_conditional_edges("update_mastery", route_loop, {"assess_mastery": "assess_mastery", "end": END})
-workflow.add_edge("quiz_error", END)
-
-quiz_app = workflow.compile(checkpointer=checkpointer)

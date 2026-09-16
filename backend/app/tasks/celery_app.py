@@ -18,11 +18,15 @@ celery_app = Celery(
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
     task_cls=BaseTask,
-    include=["app.tasks.document_tasks", "app.tasks.concept_tasks", "app.tasks.quiz_tasks"],
+    include=["app.tasks.document_tasks", "app.tasks.concept_tasks", "app.tasks.quiz_tasks", "app.tasks.assignment_tasks", "app.tasks.analytics_tasks"],
 )
 
 celery_app.conf.update(
     task_track_started=True,
     timezone="UTC",
     enable_utc=True,
+    # Requeue in-flight tasks if the worker restarts, so uploads can never
+    # get stranded in 'queued' during deploys.
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
 )

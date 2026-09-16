@@ -95,3 +95,4 @@ class QuizDetailOut(BaseModel):
 
     class Config:
         from_attributes = True
+

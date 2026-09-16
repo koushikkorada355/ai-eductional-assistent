@@ -168,8 +168,8 @@ def _evaluate_open(question: QuizQuestion, user_answer: str) -> dict:
 
 
 @celery_app.task(name="quiz.generate_batch", bind=True, max_retries=2)
-def generate_batch_task(self, quiz_id: str, num_questions: int = 5) -> str:
-    logger.info(f"[quiz.batch_task] quiz={quiz_id} n={num_questions} entry")
+def generate_batch_task(self, quiz_id: str, num_mcq: int = 3, num_open: int = 2) -> str:
+    logger.info(f"[quiz.batch_task] quiz={quiz_id} mcq={num_mcq} open={num_open} entry")
     db = SessionLocal()
     try:
         quiz = db.get(Quiz, uuid.UUID(quiz_id))
@@ -177,9 +177,13 @@ def generate_batch_task(self, quiz_id: str, num_questions: int = 5) -> str:
             return "failed:not-found"
         project_id, goal = str(quiz.project_id), quiz.goal or ""
         db.close()
-        from app.ai.quiz_graph import generate_quiz_batch
+        from app.ai.nodes import generate_quiz_batch
 
-        ids = generate_quiz_batch(project_id, quiz_id, goal, max(1, min(num_questions, 10)))
+        num_mcq = max(0, min(int(num_mcq), 10))
+        num_open = max(0, min(int(num_open), 10))
+        if num_mcq + num_open < 1 or num_mcq + num_open > 10:
+            raise ValueError("Total questions (MCQs + open-ended) must be between 1 and 10")
+        ids = generate_quiz_batch(project_id, quiz_id, goal, num_mcq, num_open)
         db = SessionLocal()
         quiz = db.get(Quiz, uuid.UUID(quiz_id))
         quiz.status = "in_progress"

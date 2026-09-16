@@ -1,6 +1,9 @@
-.mastery-list { display: flex; flex-direction: column; gap: 10px; }
-.mastery-row { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
-.mastery-label { display: flex; justify-content: space-between; font-size: 14px; font-weight: 600; margin-bottom: 6px; }
-.mastery-track { height: 8px; background: #eef2f9; border-radius: 99px; overflow: hidden; }
-.mastery-fill { height: 100%; background: var(--primary); border-radius: 99px; }
-.muted { color: var(--muted); }
+.mastery-list { display: flex; flex-direction: column; gap: 13px; }
+.mastery-row {
+  background: #fff; border: 1px solid var(--border);
+  border-radius: var(--radius-md); padding: 15px 17px; box-shadow: var(--shadow-sm);
+}
+.mastery-label { display: flex; justify-content: space-between; gap: 10px; font-size: 1rem; font-weight: 600; margin-bottom: 9px; }
+.mastery-label span:last-child { color: var(--primary); font-weight: 800; }
+.mastery-track { height: 10px; background: #e8edf5; border-radius: 99px; overflow: hidden; }
+.mastery-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent)); border-radius: 99px; }

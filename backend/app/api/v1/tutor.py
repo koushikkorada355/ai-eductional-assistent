@@ -1,14 +1,14 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional, Any
 from langchain_core.messages import HumanMessage, AIMessage
 from app.db.session import get_db
 from app.api.deps import get_owned_project
 from app.db.models.project import Project
 from app.db.models.chat import ChatSession, Message
 from app.schemas.chat import MessageOut, ChatSessionOut
-from app.ai.tutor_graph import tutor_app
+from app.ai.graphs.tutor_graph import tutor_app
 
 router = APIRouter()
 
@@ -19,6 +19,7 @@ class TutorResponse(BaseModel):
     answer: str
     chat_session_id: str
     message_id: str
+    citations: Optional[Any] = None
 
 def get_or_create_session(project_id, db: Session) -> ChatSession:
     session = db.query(ChatSession).filter(ChatSession.project_id == project_id).first()
@@ -55,13 +56,14 @@ async def tutor_chat(
         config=config,
     )
     answer = result["final_answer"]
+    citations = result.get("citations") or []
 
-    assistant_msg = Message(chat_session_id=chat_session.id, role="assistant", content=answer)
+    assistant_msg = Message(chat_session_id=chat_session.id, role="assistant", content=answer, citations=citations)
     db.add(assistant_msg)
     db.commit()
     db.refresh(assistant_msg)
 
-    return {"answer": answer, "chat_session_id": str(chat_session.id), "message_id": str(assistant_msg.id)}
+    return {"answer": answer, "chat_session_id": str(chat_session.id), "message_id": str(assistant_msg.id), "citations": citations}
 
 @router.get("/{project_id}/chat", response_model=ChatSessionOut)
 def get_chat_session(

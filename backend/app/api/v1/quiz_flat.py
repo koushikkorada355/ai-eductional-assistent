@@ -5,7 +5,7 @@ that the project/quiz belongs to the authenticated user via dependency
 injection (get_owned_project_by_id / get_owned_quiz).
 """
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 from typing import List, Optional, Any
 from uuid import UUID
@@ -16,7 +16,8 @@ from app.api.deps import get_owned_project_by_id, get_owned_quiz
 from app.db.models.project import Project
 from app.db.models.assessment import Concept, Quiz, QuizQuestion
 from app.schemas.quiz import QuizQuestionOut, QuizQuestionResultOut, QuizAttemptOut, QuizDetailOut
-from app.ai.quiz_graph import quiz_app, evaluate_answer, update_mastery, MAX_QUESTIONS
+from app.ai.graphs.quiz_graph import quiz_app
+from app.ai.nodes import evaluate_answer, update_mastery, MAX_QUESTIONS
 
 router = APIRouter()
 
@@ -28,8 +29,16 @@ class AnswerRequest(BaseModel):
 
 class CreateQuizRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    goal: str = Field(..., min_length=1, max_length=500)
-    num_questions: int = Field(default=5, ge=1, le=10)
+    goal: Optional[str] = Field(default="", max_length=500)
+    num_mcq: int = Field(default=3, ge=0, le=10)
+    num_open: int = Field(default=2, ge=0, le=10)
+
+    @model_validator(mode="after")
+    def _check_total(self):
+        total = (self.num_mcq or 0) + (self.num_open or 0)
+        if total < 1 or total > 10:
+            raise ValueError("Total questions (MCQs + open-ended) must be between 1 and 10")
+        return self
 
 
 class CreateQuizResponse(BaseModel):
@@ -111,7 +120,7 @@ async def start_quiz(
     has_concepts = db.query(Concept.id).filter(Concept.project_id == project.id).first() is not None
     if not has_concepts:
         raise HTTPException(status_code=400, detail="No concepts found. Upload PDFs first.")
-    quiz = Quiz(project_id=project.id, name=body.name.strip(), goal=body.goal.strip(), status="generating")
+    quiz = Quiz(project_id=project.id, name=body.name.strip(), goal=(body.goal or "").strip(), status="generating")
     db.add(quiz)
     db.commit()
     db.refresh(quiz)
@@ -120,7 +129,7 @@ async def start_quiz(
     try:
         from app.tasks.quiz_tasks import generate_batch_task
 
-        generate_batch_task.delay(str(quiz.id), body.num_questions)
+        generate_batch_task.delay(str(quiz.id), body.num_mcq, body.num_open)
     except Exception as e:
         logger.error(f"[quiz.create] dispatch failed quiz={quiz.id}: {e}")
         quiz.status = "failed"

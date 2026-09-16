@@ -1,11 +1,12 @@
 import json
+import re
 import uuid
 from loguru import logger
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from app.config import settings
 from app.db.session import SessionLocal
-from app.db.models.document import DocumentChunk
+from app.db.models.document import DocumentChunk, Document
 from app.ai.llm import get_llm
 from app.schemas.quiz import ChatMasterySignal
 
@@ -59,6 +60,8 @@ async def general_chat(state: dict) -> dict:
 
 
 def retrieve_context(state: dict) -> dict:
+    # RAG pipeline: Gemini query embedding -> pgvector cosine search,
+    # top-5 chunks strictly filtered by project_id.
     embeddings = GoogleGenerativeAIEmbeddings(
         model="gemini-embedding-001",
         google_api_key=settings.GOOGLE_API_KEY,
@@ -67,17 +70,40 @@ def retrieve_context(state: dict) -> dict:
     query_vector = embeddings.embed_query(state["user_question"])
     db = SessionLocal()
     try:
-        chunks = (
-            db.query(DocumentChunk)
+        rows = (
+            db.query(DocumentChunk, Document.file_name)
+            .join(Document, Document.id == DocumentChunk.document_id)
             .filter(DocumentChunk.project_id == uuid.UUID(state["project_id"]))
             .order_by(DocumentChunk.embedding.cosine_distance(query_vector))
             .limit(5)
             .all()
         )
-        context = [f"[Source: Page {c.page_number}] {c.content}" for c in chunks]
+        context = [f"[Source: Page {c.page_number}] {c.content}" for c, _ in rows]
+        sources = [
+            {
+                "chunk_id": str(c.id),
+                "document_id": str(c.document_id),
+                "file_name": file_name,
+                "page_number": c.page_number,
+                "content": c.content,
+            }
+            for c, file_name in rows
+        ]
     finally:
         db.close()
-    return {"retrieved_context": context}
+    return {"retrieved_context": context, "retrieved_sources": sources}
+
+    # COLIVARA ALTERNATIVE - COMMENTED OUT (revert by swapping these blocks)
+    # Visual RAG retrieval — ColiVara search -> OCR pages -> text.
+    # Return shape is unchanged so the grade/generate nodes and their
+    # prompt templates work exactly as before, with page sources kept.
+    # from app.services.document_retrieval_service import retrieve_and_extract_context
+    #
+    # _, ocr_results = retrieve_and_extract_context(state["user_question"])
+    # context = [
+    #     f"[Source: Page {r['page_id']}] {r['extracted_text']}" for r in ocr_results
+    # ]
+    # return {"retrieved_context": context}
 
 
 async def grade_documents(state: dict) -> dict:
@@ -142,13 +168,45 @@ async def generate_answer(state: dict) -> dict:
     res = await llm.ainvoke(
         [
             SystemMessage(
-                content="You are an AI Study Companion. Answer the user's question using ONLY the provided Context. "
-                "If the context does not contain the answer, state 'I cannot answer this based on the provided materials.' "
-                "You MUST provide a citation for every factual claim as [Source: Page X]."
+                content="You are an AI Study Companion. Answer the user's question in your own words, "
+                "SYNTHESIZING the key points from the provided Context into a clear, structured response. "
+                "NEVER copy chunk text verbatim — always paraphrase and combine related points. "
+                "Use ONLY the provided Context. If the context does not contain the answer, state "
+                "'I cannot answer this based on the provided materials.' "
+                "End every factual claim with a citation exactly like [Source: Page 3], using the page "
+                "numbers shown in the Context. Example: 'JWTs are signed tokens [Source: Page 2].'"
                 f"\n\nContext:\n{context}"
             ),
             HumanMessage(content=state["user_question"]),
         ]
     )
     logger.info(f"[tutor.generate] project_id={project_id} done")
-    return {"final_answer": res.content, "messages": [res]}
+    citations = _build_citations(res.content, state.get("retrieved_sources", []))
+    return {"final_answer": res.content, "messages": [res], "citations": citations}
+
+
+def _build_citations(answer: str, sources: list) -> list:
+    """Match [Source: Page X] markers to retrieved chunks.
+
+    Returns [{pdf_name, page_number, chunk_excerpt}]. Prefers exactly the
+    cited pages; falls back to all retrieved chunks when the model omits
+    markers, so grounded answers always carry their sources.
+    """
+    cited_pages = {int(n) for n in re.findall(r"\[Source:\s*Page\s*(\d+)\]", answer or "")}
+    cards: dict[int, dict] = {}
+    for s in sources or []:
+        try:
+            page = int(s.get("page_number"))
+        except (TypeError, ValueError):
+            continue
+        if page in cards:
+            continue
+        if cited_pages and page not in cited_pages:
+            continue
+        content = str(s.get("content", ""))
+        cards[page] = {
+            "pdf_name": s.get("file_name", "Document"),
+            "page_number": page,
+            "chunk_excerpt": content[:220] + ("..." if len(content) > 220 else ""),
+        }
+    return [cards[p] for p in sorted(cards)]

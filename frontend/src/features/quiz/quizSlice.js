@@ -1,8 +1,8 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { createQuiz, saveAnswer, submitQuiz, fetchAttempts, fetchQuizDetail } from './quizApi.js';
 
-export const startQuiz = createAsyncThunk('quiz/start', async ({ projectId, name, goal }, { rejectWithValue }) => {
-  try { return await createQuiz(projectId, { name, goal, num_questions: 5 }); } catch (e) { return rejectWithValue(e.response?.data?.detail || 'Failed to create quiz'); }
+export const startQuiz = createAsyncThunk('quiz/start', async ({ projectId, name, goal, numMcq, numOpen }, { rejectWithValue }) => {
+  try { return await createQuiz(projectId, { name, goal: goal || '', num_mcq: numMcq ?? 3, num_open: numOpen ?? 2 }); } catch (e) { return rejectWithValue(e.response?.data?.detail || 'Failed to create quiz'); }
 });
 export const refreshQuiz = createAsyncThunk('quiz/refresh', async ({ quizId }, { rejectWithValue }) => {
   try { return await fetchQuizDetail(quizId); } catch (e) { return rejectWithValue('Failed to load quiz'); }
@@ -23,6 +23,9 @@ export const loadQuizDetail = createAsyncThunk('quiz/detail', async ({ quizId },
   try { return await fetchQuizDetail(quizId); } catch (e) { return rejectWithValue('Failed to load quiz details'); }
 });
 export const viewAttempt = createAsyncThunk('quiz/viewAttempt', async ({ quizId }, { rejectWithValue }) => {
+  try { return await fetchQuizDetail(quizId); } catch (e) { return rejectWithValue('Failed to load quiz details'); }
+});
+export const resumeAttempt = createAsyncThunk('quiz/resume', async ({ quizId }, { rejectWithValue }) => {
   try { return await fetchQuizDetail(quizId); } catch (e) { return rejectWithValue('Failed to load quiz details'); }
 });
 
@@ -122,7 +125,35 @@ const slice = createSlice({
         s.view = 'results';
         s.status = 'done';
       })
-      .addCase(viewAttempt.rejected, (s, a) => { s.error = a.payload; });
+      .addCase(viewAttempt.rejected, (s, a) => { s.error = a.payload; })
+      .addCase(resumeAttempt.pending, (s) => { s.status = 'loading'; s.error = null; })
+      .addCase(resumeAttempt.fulfilled, (s, a) => {
+        const d = a.payload;
+        s.quizId = d.id;
+        s.name = d.name;
+        s.questions = d.questions || [];
+        s.index = 0;
+        s.drafts = Object.fromEntries((d.questions || []).map((q) => [q.id, q.user_answer || '']));
+        s.average = d.average_score;
+        if (d.status === 'completed') {
+          s.view = 'results';
+          s.status = 'done';
+        } else if (d.status === 'in_progress') {
+          s.view = 'active';
+          s.status = 'active';
+        } else if (d.status === 'evaluating') {
+          s.view = 'evaluating';
+          s.status = 'evaluating';
+        } else if (d.status === 'failed') {
+          s.view = 'start';
+          s.status = 'idle';
+          s.error = 'Quiz generation failed. Please try again.';
+        } else {
+          s.view = 'generating';
+          s.status = 'generating';
+        }
+      })
+      .addCase(resumeAttempt.rejected, (s, a) => { s.status = 'idle'; s.error = a.payload; });
   },
 });
 

@@ -1,4 +1,3 @@
-import json
 import uuid
 from datetime import datetime
 from loguru import logger
@@ -6,10 +5,8 @@ from app.db.session import SessionLocal
 import app.db.base  # noqa: F401
 from app.db.models.document import Document, DocumentChunk
 from app.db.models.assessment import Concept
-from app.schemas.quiz import ConceptList
+from app.schemas.mastery import normalize_concept_name
 from app.tasks.celery_app import celery_app
-from app.ai.llm import get_llm
-from langchain_core.messages import HumanMessage, SystemMessage
 
 
 @celery_app.task(name="concepts.extract", bind=True, max_retries=3)
@@ -41,47 +38,36 @@ def extract_concepts_task(self, document_id: str) -> str:
             logger.warning(f"[concepts.extract] no text for document {document_id}")
             return "skipped:empty"
 
-        llm = get_llm()
-        for attempt in range(3):
-            try:
-                res = llm.invoke(
-                    [
-                        SystemMessage(content="Extract the top 5 key learning concepts from this text. Return as a JSON list of strings."),
-                        HumanMessage(content=sample),
-                    ]
-                )
-                raw = res.content.strip()
-                # tolerate markdown fences
-                if "```" in raw:
-                    raw = raw.replace("```json", "").replace("```", "").strip()
-                parsed = json.loads(raw)
-                if isinstance(parsed, list):
-                    validated = ConceptList(concepts=parsed)
-                elif isinstance(parsed, dict) and "concepts" in parsed:
-                    validated = ConceptList(**parsed)
-                else:
-                    raise ValueError("unexpected concept payload")
-                break
-            except Exception as e:
-                logger.warning(f"[concepts.extract] LLM parse retry {attempt + 1}/3 for doc {document_id}: {e}")
-                if attempt == 2:
-                    raise
-        else:
-            raise RuntimeError("concept extraction retries exhausted")
+        # Shared utility: exact extraction prompt, no max limit, strict validation.
+        from app.ai.concept_extractor import extract_concepts, find_semantic_duplicate
+
+        try:
+            items = extract_concepts(sample)
+        except Exception as e:
+            logger.error(f"[concepts.extract] extraction failed for doc {document_id}: {e}")
+            raise
 
         inserted = 0
-        for name in validated.concepts:
-            clean = name.strip()[:200]
-            if not clean:
+        for item in items:
+            try:
+                clean = normalize_concept_name(item["name"])[:200]
+            except ValueError as ve:
+                logger.warning(f"[concepts.extract] rejecting non-topic concept {item['name']!r}: {ve}")
                 continue
-            exists = (
-                db.query(Concept)
-                .filter(Concept.project_id == project_id, Concept.name == clean)
-                .first()
+            dupe = find_semantic_duplicate(db, project_id, clean)
+            if dupe is not None:
+                if not dupe.description and item.get("description"):
+                    dupe.description = item["description"][:1000]
+                    db.commit()
+                continue
+            db.add(
+                Concept(
+                    project_id=project_id,
+                    name=clean,
+                    description=item.get("description", "")[:1000] or None,
+                    mastery_level=0.0,
+                )
             )
-            if exists:
-                continue
-            db.add(Concept(project_id=project_id, name=clean, mastery_level=0.0))
             inserted += 1
         db.commit()
         logger.success(f"[concepts.extract] project_id={project_id} inserted={inserted}")
@@ -100,23 +86,32 @@ def extract_concepts_task(self, document_id: str) -> str:
 @celery_app.task(name="mastery.update_from_chat")
 def update_mastery_from_chat_task(project_id: str, concept_name: str, confidence_score: float) -> str:
     logger.info(f"[mastery.chat] project_id={project_id} concept={concept_name} score={confidence_score}")
+    try:
+        clean_name = normalize_concept_name(concept_name)[:200]
+    except ValueError as ve:
+        logger.warning(f"[mastery.chat] rejecting non-topic concept {concept_name!r}: {ve}")
+        return "skipped:invalid-name"
     db = SessionLocal()
     try:
         pid = uuid.UUID(project_id)
         concept = (
             db.query(Concept)
-            .filter(Concept.project_id == pid, Concept.name == concept_name)
+            .filter(Concept.project_id == pid, Concept.name == clean_name)
             .first()
         )
         if concept is None:
-            concept = Concept(project_id=pid, name=concept_name, mastery_level=0.0)
-            db.add(concept)
-            db.flush()
+            from app.ai.concept_extractor import find_semantic_duplicate
+
+            dupe = find_semantic_duplicate(db, pid, clean_name)
+            concept = dupe if dupe is not None else Concept(project_id=pid, name=clean_name, mastery_level=0.0)
+            if dupe is None:
+                db.add(concept)
+                db.flush()
         score = max(0.0, min(100.0, float(confidence_score)))
         concept.mastery_level = round((float(concept.mastery_level) * 0.7) + (score * 0.3), 2)
         concept.last_assessed_at = datetime.utcnow()
         db.commit()
-        logger.success(f"[mastery.chat] project_id={project_id} concept={concept_name} new={concept.mastery_level}")
+        logger.success(f"[mastery.chat] project_id={project_id} concept={clean_name} new={concept.mastery_level}")
         return f"updated:{concept.mastery_level}"
     except Exception as e:
         db.rollback()

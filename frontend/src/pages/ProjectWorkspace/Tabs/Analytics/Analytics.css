@@ -1,1 +1,4 @@
-.placeholder-card { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+.analytics-empty { text-align: center; padding: 64px 32px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.analytics-icon { color: var(--primary); display: inline-flex; margin-bottom: 6px; }
+.analytics-empty h3 { font-size: 1.6rem; }
+.analytics-empty p { max-width: 560px; font-size: 1.05rem; }

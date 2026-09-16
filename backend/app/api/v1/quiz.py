@@ -10,7 +10,8 @@ from app.api.deps import get_owned_project
 from app.db.models.project import Project
 from app.db.models.assessment import Concept, Quiz, QuizQuestion
 from app.schemas.quiz import ConceptOut, QuizQuestionOut
-from app.ai.quiz_graph import quiz_app, evaluate_answer, update_mastery, MAX_QUESTIONS
+from app.ai.graphs.quiz_graph import quiz_app
+from app.ai.nodes import evaluate_answer, update_mastery, MAX_QUESTIONS
 
 router = APIRouter()
 

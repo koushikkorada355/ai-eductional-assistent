@@ -13,6 +13,8 @@ from app.api.v1.tutor import router as tutor_router
 from app.api.v1.materials import router as materials_router
 from app.api.v1.quiz import router as quiz_router
 from app.api.v1.quiz_flat import router as quiz_flat_router
+from app.api.v1.mastery import router as mastery_router
+from app.api.v1.assignment import router as assignment_router
 
 # 1. Configure Logger
 logger.remove()
@@ -36,6 +38,13 @@ async def lifespan(app: FastAPI):
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
                 conn.commit()
             Base.metadata.create_all(bind=engine)
+            # Idempotent migrations for existing deployments (create_all only creates new tables)
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE assignments ADD COLUMN IF NOT EXISTS title VARCHAR DEFAULT 'Untitled Assignment'"))
+                conn.execute(text("ALTER TABLE assignment_submissions ADD COLUMN IF NOT EXISTS answers JSONB"))
+                conn.execute(text("ALTER TABLE assignment_submissions ADD COLUMN IF NOT EXISTS score FLOAT DEFAULT 0.0"))
+                conn.execute(text("ALTER TABLE assignment_submissions ADD COLUMN IF NOT EXISTS total INTEGER DEFAULT 0"))
+                conn.commit()
             logger.success("Database connected and tables created.")
             break
         except OperationalError as e:
@@ -73,6 +82,8 @@ app.include_router(tutor_router, prefix="/api/v1/spaces/{space_id}/projects", ta
 app.include_router(materials_router, prefix="/api/v1/spaces/{space_id}/projects", tags=["Materials"])
 app.include_router(quiz_router, prefix="/api/v1/spaces/{space_id}/projects", tags=["Quiz"])
 app.include_router(quiz_flat_router, prefix="/api/v1", tags=["Quiz"])
+app.include_router(mastery_router, prefix="/api/v1", tags=["Mastery"])
+app.include_router(assignment_router, prefix="/api/v1/spaces/{space_id}/projects", tags=["Assignments"])
 
 @app.get("/health")
 async def health_check():

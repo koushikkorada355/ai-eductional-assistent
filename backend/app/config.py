@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     LANGCHAIN_ENDPOINT: str | None = None
     REDIS_URL: str | None = None
     GOOGLE_API_KEY: str | None = None
+    COLIVARA_API_KEY: str | None = None
+    OCR_API_KEY: str | None = None
 
     # We tell Pydantic to look for a .env file, but Docker will inject the env vars directly
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra='ignore')

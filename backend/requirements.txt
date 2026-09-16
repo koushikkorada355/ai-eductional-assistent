@@ -8,6 +8,8 @@ pydantic-settings
 python-jose[cryptography]
 passlib[bcrypt]
 python-multipart
+python-dotenv
+requests
 bcrypt
 langchain
 langchain-core

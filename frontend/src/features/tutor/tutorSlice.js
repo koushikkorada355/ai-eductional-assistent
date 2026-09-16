@@ -20,7 +20,7 @@ const slice = createSlice({
       .addCase(sendQuestion.pending, (s) => { s.status = 'loading'; })
       .addCase(sendQuestion.fulfilled, (s, a) => {
         s.status = 'succeeded';
-        s.messages.push({ role: 'assistant', content: a.payload.answer });
+        s.messages.push({ role: 'assistant', content: a.payload.answer, citations: a.payload.citations || [] });
       })
       .addCase(sendQuestion.rejected, (s, a) => { s.status = 'failed'; s.error = a.payload; });
   },

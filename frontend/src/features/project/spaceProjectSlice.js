@@ -33,7 +33,7 @@ export const removeProject = createAsyncThunk('spaceProject/removeProject', asyn
   try { await deleteProject(spaceId, projectId); return { spaceId, projectId }; } catch (e) { return rejectWithValue('Failed to delete project'); }
 });
 export const uploadDocument = createAsyncThunk('spaceProject/uploadDocument', async ({ spaceId, projectId, file }, { rejectWithValue }) => {
-  try { return await uploadPdf(spaceId, projectId, file); } catch (e) { return rejectWithValue('PDF upload failed'); }
+  try { return await uploadPdf(spaceId, projectId, file); } catch (e) { return rejectWithValue(e.response?.data?.detail || 'PDF upload failed'); }
 });
 export const loadDocuments = createAsyncThunk('spaceProject/loadDocuments', async ({ spaceId, projectId }, { rejectWithValue }) => {
   try { return await fetchDocuments(spaceId, projectId); } catch (e) { return rejectWithValue('Failed to load documents'); }

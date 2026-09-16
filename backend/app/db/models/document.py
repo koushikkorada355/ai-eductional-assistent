@@ -12,6 +12,7 @@ class Document(Base):
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     file_name = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
+    file_hash = Column(String(64), nullable=True, index=True)
     status = Column(String, default="queued", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
