@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 from uuid import UUID
 from datetime import datetime
 
@@ -9,6 +10,9 @@ class DocumentOut(BaseModel):
     file_path: str
     status: str
     created_at: datetime
+    # Additive derived fields (do not affect existing consumers).
+    pages: Optional[int] = None
+    chunks: Optional[int] = None
 
     class Config:
         from_attributes = True

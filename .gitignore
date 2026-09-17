@@ -26,3 +26,17 @@ redis_data/
 
 # Local git backup - never commit
 .git-corrupted/
+
+# Unimportant / generated - never commit
+figmadesign/
+frontend/dist/
+frontend/node_modules/
+node_modules/
+dist/
+build/
+coverage/
+*.log
+*.tsbuildinfo
+.vite/
+.pytest_cache/
+.mypy_cache/

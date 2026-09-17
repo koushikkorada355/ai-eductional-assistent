@@ -17,4 +17,4 @@ class Project(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     space = relationship("Space", back_populates="projects")
-    chat_session = relationship("ChatSession", back_populates="project", cascade="all, delete-orphan", passive_deletes=True, uselist=False)
+    chat_sessions = relationship("ChatSession", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)

@@ -2,7 +2,7 @@ import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import {
   fetchSpaces, createSpace, updateSpace, deleteSpace,
   fetchProjects, createProject, updateProject, deleteProject,
-  uploadPdf, fetchDocuments,
+  uploadPdf, fetchDocuments, retryDocument as retryDocumentApi, deleteDocument as deleteDocumentApi,
 } from './projectApi.js';
 
 export const loadSpaces = createAsyncThunk('spaceProject/loadSpaces', async (_, { rejectWithValue }) => {
@@ -37,6 +37,12 @@ export const uploadDocument = createAsyncThunk('spaceProject/uploadDocument', as
 });
 export const loadDocuments = createAsyncThunk('spaceProject/loadDocuments', async ({ spaceId, projectId }, { rejectWithValue }) => {
   try { return await fetchDocuments(spaceId, projectId); } catch (e) { return rejectWithValue('Failed to load documents'); }
+});
+export const retryDocument = createAsyncThunk('spaceProject/retryDocument', async ({ spaceId, projectId, documentId }, { rejectWithValue }) => {
+  try { return await retryDocumentApi(spaceId, projectId, documentId); } catch (e) { return rejectWithValue(e.response?.data?.detail || 'Failed to retry document'); }
+});
+export const removeDocument = createAsyncThunk('spaceProject/removeDocument', async ({ spaceId, projectId, documentId }, { rejectWithValue }) => {
+  try { await deleteDocumentApi(spaceId, projectId, documentId); return { documentId }; } catch (e) { return rejectWithValue(e.response?.data?.detail || 'Failed to delete document'); }
 });
 
 const slice = createSlice({
@@ -80,6 +86,12 @@ const slice = createSlice({
       })
       .addCase(uploadDocument.fulfilled, (s, a) => { s.documents.unshift(a.payload); })
       .addCase(loadDocuments.fulfilled, (s, a) => { s.documents = a.payload; })
+      .addCase(retryDocument.fulfilled, (s, a) => {
+        s.documents = s.documents.map((d) => (d.id === a.payload.id ? a.payload : d));
+      })
+      .addCase(removeDocument.fulfilled, (s, a) => {
+        s.documents = s.documents.filter((d) => d.id !== a.payload.documentId);
+      })
       .addMatcher((ac) => ac.type.endsWith('/rejected'), (s, a) => { s.error = a.payload; });
   },
 });

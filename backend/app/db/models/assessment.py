@@ -10,6 +10,9 @@ class Concept(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Source attribution: document this concept was first extracted from.
+    # Nullable — concepts created before tracking (or via chat) have no source.
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True)
     name = Column(String, nullable=False, index=True)
     description = Column(Text, nullable=True)
     mastery_level = Column(Float, default=0.0, nullable=False)

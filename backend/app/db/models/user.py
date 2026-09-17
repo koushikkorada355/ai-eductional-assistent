@@ -11,6 +11,8 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
+    # Display name collected at registration (nullable for pre-existing rows).
+    name = Column(String(120), nullable=True)
     role = Column(String, default="user") # 'user' or 'admin'
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)

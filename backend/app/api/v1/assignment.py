@@ -102,6 +102,7 @@ async def list_concepts(
         "name": c.name,
         "description": c.description,
         "mastery_level": c.mastery_level,
+        "document_id": str(c.document_id) if c.document_id else None,
     } for c in concepts]
 
 

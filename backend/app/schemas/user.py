@@ -20,11 +20,24 @@ def _validate_email(v: str) -> str:
 class UserCreate(BaseModel):
     email: str
     password: str
+    name: str | None = None
 
     @field_validator("email")
     @classmethod
     def validate_email(cls, v: str) -> str:
         return _validate_email(v)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) > 120:
+            raise ValueError("Name must be 120 characters or fewer")
+        return v
 
 class UserLogin(BaseModel):
     email: str
@@ -38,6 +51,7 @@ class UserLogin(BaseModel):
 class UserOut(BaseModel):
     id: UUID
     email: str
+    name: str | None = None
     role: str
     is_active: bool
 

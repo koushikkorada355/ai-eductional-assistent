@@ -49,7 +49,7 @@ def generate_assignment_questions(state: dict) -> dict:
         if not concept_names:
             return {"error": "Some concepts do not belong to this project"}
 
-        num_questions = max(1, min(int(state.get("num_questions") or 5), 10))
+        num_questions = max(1, min(int(state.get("num_questions") or 5), 50))
 
         # Idempotency: drop stale questions so retries never duplicate.
         db.query(AssignmentQuestion).filter(AssignmentQuestion.assignment_id == auuid).delete()

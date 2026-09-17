@@ -319,3 +319,44 @@ now render concepts of projects and mastary score also for it
 ```
 now render concepts in frontend and mastary score also for it
 ```
+
+## 2026-09-17 — share address with friend for local run
+```
+i want to share my address to my friend can you log that,while runnign on my mchine he can use okay understand
+```
+
+## 2026-09-17 — frontend logs missing
+```
+why not getting the frontend logs in docker
+```
+
+## 2026-09-17 — tutor follow-up recommendations
+```
+in aitutor,after ai reponse give recommodiations questions,style it properly
+```
+
+## 2026-09-18 — grounded suggestions only, remove date
+```
+dont reccomend question for general question right,and make system prompt should good for while recommand question it should answerable right and,remove the date in convesation below,my problem my user click recommend question it should be answerable right make it
+```
+
+## 2026-09-18 — fix suggestion quality
+```
+questions recommand but it not good questions,fix it
+```
+
+## 2026-09-18 — concepts-only suggestions + creative fallback
+```
+stictly only recommand through conversations and concepts only right,and dont give i cannot provide based on material ->instead of something creative words right and not recommends any wuestion while answer
+```
+
+## 2026-09-18 — blank open-ended scores 100
+```
+for open-ended if not answer answer i get the 100 pass,fix it
+```
+
+## 2026-09-18 — admin dashboard + auth redesign
+```
+# Admin Dashboard + Login/Register UI
+Build a polished and modern Admin Dashboard for the AI Study Companion. (AI Learning Operations Center: Overview, Users, Spaces & Projects, Activity, Learning Analytics, AI Usage, AI Evaluation, Background Processing, System Health + Login/Register redesign with Learn → Practice → Measure → Grow identity)
+```

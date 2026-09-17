@@ -5,6 +5,7 @@ import tutorReducer from '../features/tutor/tutorSlice.js';
 import quizReducer from '../features/quiz/quizSlice.js';
 import assignmentsReducer from '../features/assignments/assignmentsSlice.js';
 import conceptsReducer from '../features/concepts/conceptsSlice.js';
+import analyticsReducer from '../features/analytics/analyticsSlice.js';
 
 export const store = configureStore({
   reducer: {
@@ -14,5 +15,6 @@ export const store = configureStore({
     quiz: quizReducer,
     assignments: assignmentsReducer,
     concepts: conceptsReducer,
+    analytics: analyticsReducer,
   },
 });

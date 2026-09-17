@@ -44,7 +44,7 @@ def generate_assignment_task(self, assignment_id: str, num_questions: int = 5) -
                 "project_id": project_id,
                 "concept_ids": concept_ids,
                 "title": title,
-                "num_questions": max(1, min(int(num_questions or 5), 10)),
+                "num_questions": max(1, min(int(num_questions or 5), 50)),
                 "answers": {},
             },
             thread_id=f"assignment-generate-{assignment_id}",

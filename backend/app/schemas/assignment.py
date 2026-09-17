@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any
 
 class CreateAssignmentRequest(BaseModel):
     concept_ids: List[UUID] = Field(..., min_length=1, max_length=10)
-    num_questions: int = Field(default=5, ge=1, le=10)
+    num_questions: int = Field(default=5, ge=1, le=50)
     title: Optional[str] = Field(default=None, max_length=200)
 
 

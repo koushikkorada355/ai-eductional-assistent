@@ -3,11 +3,12 @@ import os
 import uuid
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.api.deps import get_owned_project
 from app.db.models.project import Project
-from app.db.models.document import Document
+from app.db.models.document import Document, DocumentChunk
 from app.schemas.document import DocumentOut
 from app.tasks.document_tasks import process_document_task
 # from app.services.document_retrieval_service import index_pdf_to_colivara
@@ -17,12 +18,82 @@ router = APIRouter()
 UPLOAD_DIR = "uploads"
 
 
+def _with_stats(db: Session, doc: Document) -> Document:
+    pages, chunks = db.query(func.max(DocumentChunk.page_number), func.count(DocumentChunk.id)).filter(
+        DocumentChunk.document_id == doc.id).first()
+    doc.pages = pages or 0
+    doc.chunks = chunks or 0
+    return doc
+
+
 @router.get("/{project_id}/documents", response_model=List[DocumentOut])
 def list_documents(
     project: Project = Depends(get_owned_project),
     db: Session = Depends(get_db),
 ):
-    return db.query(Document).filter(Document.project_id == project.id).order_by(Document.created_at.desc()).all()
+    docs = db.query(Document).filter(Document.project_id == project.id).order_by(Document.created_at.desc()).all()
+    return [_with_stats(db, d) for d in docs]
+
+
+@router.get("/{project_id}/documents/{document_id}/evidence")
+def document_evidence(
+    project_id: uuid.UUID,
+    document_id: uuid.UUID,
+    project: Project = Depends(get_owned_project),
+    db: Session = Depends(get_db),
+):
+    doc = db.query(Document).filter(Document.id == document_id, Document.project_id == project.id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    chunks = (
+        db.query(DocumentChunk)
+        .filter(DocumentChunk.document_id == doc.id)
+        .order_by(DocumentChunk.page_number)
+        .limit(20)
+        .all()
+    )
+    return {
+        "document": {"id": doc.id, "file_name": doc.file_name, "status": doc.status},
+        "evidence": [{"page_number": c.page_number, "excerpt": (c.content or "")[:600]} for c in chunks],
+    }
+
+
+@router.post("/{project_id}/documents/{document_id}/retry", response_model=DocumentOut)
+def retry_document(
+    project_id: uuid.UUID,
+    document_id: uuid.UUID,
+    project: Project = Depends(get_owned_project),
+    db: Session = Depends(get_db),
+):
+    doc = db.query(Document).filter(Document.id == document_id, Document.project_id == project.id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    doc.status = "queued"
+    db.commit()
+    db.refresh(doc)
+    process_document_task.delay(str(doc.id))
+    return _with_stats(db, doc)
+
+
+@router.delete("/{project_id}/documents/{document_id}", status_code=204)
+def delete_document(
+    project_id: uuid.UUID,
+    document_id: uuid.UUID,
+    project: Project = Depends(get_owned_project),
+    db: Session = Depends(get_db),
+):
+    doc = db.query(Document).filter(Document.id == document_id, Document.project_id == project.id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    db.query(DocumentChunk).filter(DocumentChunk.document_id == doc.id).delete()
+    try:
+        if doc.file_path and os.path.exists(doc.file_path):
+            os.remove(doc.file_path)
+    except OSError:
+        pass
+    db.delete(doc)
+    db.commit()
+    return None
 
 
 @router.post("/{project_id}/upload-pdf", response_model=DocumentOut)

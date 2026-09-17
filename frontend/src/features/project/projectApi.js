@@ -16,3 +16,9 @@ export const uploadPdf = (spaceId, projectId, file) => {
   return api.post(`/spaces/${spaceId}/projects/${projectId}/upload-pdf`, form).then((r) => r.data);
 };
 export const fetchDocuments = (spaceId, projectId) => api.get(`/spaces/${spaceId}/projects/${projectId}/documents`).then((r) => r.data);
+export const fetchEvidence = (spaceId, projectId, documentId) =>
+  api.get(`/spaces/${spaceId}/projects/${projectId}/documents/${documentId}/evidence`).then((r) => r.data);
+export const retryDocument = (spaceId, projectId, documentId) =>
+  api.post(`/spaces/${spaceId}/projects/${projectId}/documents/${documentId}/retry`).then((r) => r.data);
+export const deleteDocument = (spaceId, projectId, documentId) =>
+  api.delete(`/spaces/${spaceId}/projects/${projectId}/documents/${documentId}`).then((r) => r.data);

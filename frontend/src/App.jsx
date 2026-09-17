@@ -1,19 +1,28 @@
+import { useEffect, useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import Navbar from './components/Navbar/Navbar.jsx';
 import Sidebar from './components/Sidebar/Sidebar.jsx';
-import Auth from './pages/Auth/Auth.jsx';
-import Dashboard from './pages/Dashboard/Dashboard.jsx';
+import Login from './pages/Auth/Login.jsx';
+import Register from './pages/Auth/Register.jsx';
+import Spaces from './pages/Spaces/Spaces.jsx';
+import GlobalAnalytics from './pages/GlobalAnalytics/GlobalAnalytics.jsx';
+import Admin from './pages/Admin/Admin.jsx';
 import ProjectWorkspace from './pages/ProjectWorkspace/ProjectWorkspace.jsx';
-import './App.css';
+import { fetchMe } from './features/auth/authApi.js';
 
-function Shell({ children }) {
+function Shell({ children, isAdmin }) {
+  const [navOpen, setNavOpen] = useState(false);
   return (
-    <div className="app-shell">
-      <Navbar />
-      <div className="app-body">
-        <Sidebar />
-        <main className="main-content">{children}</main>
+    <div className="min-h-screen bg-canvas">
+      {/* Single primary navigation: full-height left sidebar owns brand + sections.
+          The slim top header carries context (breadcrumb) + account only. */}
+      <div className="flex min-h-screen">
+        <Sidebar open={navOpen} onClose={() => setNavOpen(false)} isAdmin={isAdmin} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Navbar onMenuToggle={() => setNavOpen((v) => !v)} />
+          <main className="min-w-0 flex-1">{children}</main>
+        </div>
       </div>
     </div>
   );
@@ -21,16 +30,41 @@ function Shell({ children }) {
 
 export default function App() {
   const token = useSelector((s) => s.auth.token);
+  const [me, setMe] = useState(null);
+
+  useEffect(() => {
+    if (token) {
+      fetchMe().then(setMe).catch(() => setMe(null));
+    } else {
+      setMe(null);
+    }
+  }, [token]);
+
+  const isAdmin = me?.role === 'admin';
+  const guard = (el) => (token ? el : <Navigate to="/login" replace />);
+
   return (
     <Routes>
-      <Route path="/login" element={<Auth />} />
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      <Route path="/" element={guard(<Navigate to="/spaces" replace />)} />
+      <Route path="/spaces" element={guard(<Shell isAdmin={isAdmin}><Spaces /></Shell>)} />
+      <Route path="/analytics" element={guard(<Shell isAdmin={isAdmin}><GlobalAnalytics /></Shell>)} />
       <Route
-        path="/"
-        element={token ? <Shell><Dashboard /></Shell> : <Navigate to="/login" replace />}
+        path="/admin"
+        element={token ? (isAdmin ? <Shell isAdmin={isAdmin}><Admin /></Shell> : <Navigate to="/" replace />) : <Navigate to="/login" replace />}
       />
       <Route
         path="/spaces/:spaceId/projects/:projectId"
-        element={token ? <Shell><ProjectWorkspace /></Shell> : <Navigate to="/login" replace />}
+        element={guard(<Shell isAdmin={isAdmin}><ProjectWorkspace /></Shell>)}
+      />
+      <Route
+        path="/spaces/:spaceId/projects/:projectId/tutor"
+        element={guard(<Shell isAdmin={isAdmin}><ProjectWorkspace /></Shell>)}
+      />
+      <Route
+        path="/spaces/:spaceId/projects/:projectId/tutor/:conversationId"
+        element={guard(<Shell isAdmin={isAdmin}><ProjectWorkspace /></Shell>)}
       />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

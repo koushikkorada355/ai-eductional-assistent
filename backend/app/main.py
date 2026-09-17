@@ -15,6 +15,8 @@ from app.api.v1.quiz import router as quiz_router
 from app.api.v1.quiz_flat import router as quiz_flat_router
 from app.api.v1.mastery import router as mastery_router
 from app.api.v1.assignment import router as assignment_router
+from app.api.v1.analytics import router as analytics_router
+from app.api.v1.admin import router as admin_router
 
 # 1. Configure Logger
 logger.remove()
@@ -44,6 +46,28 @@ async def lifespan(app: FastAPI):
                 conn.execute(text("ALTER TABLE assignment_submissions ADD COLUMN IF NOT EXISTS answers JSONB"))
                 conn.execute(text("ALTER TABLE assignment_submissions ADD COLUMN IF NOT EXISTS score FLOAT DEFAULT 0.0"))
                 conn.execute(text("ALTER TABLE assignment_submissions ADD COLUMN IF NOT EXISTS total INTEGER DEFAULT 0"))
+                # Multi-conversation tutor: title + activity tracking per conversation.
+                conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS title VARCHAR(200) DEFAULT 'New conversation'"))
+                conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+                conn.execute(text("UPDATE chat_sessions SET title = 'New conversation' WHERE title IS NULL"))
+                conn.execute(text("UPDATE chat_sessions SET updated_at = created_at WHERE updated_at IS NULL"))
+                # One project can now own many conversations (drop legacy 1:1 unique).
+                # NOTE: the legacy column was declared unique=True AND index=True,
+                # so SQLAlchemy created a unique *index* named
+                # ix_chat_sessions_project_id (not a table constraint) — drop it
+                # by index name. The constraint-name variant is kept for safety
+                # across deployments.
+                conn.execute(text("ALTER TABLE chat_sessions DROP CONSTRAINT IF EXISTS chat_sessions_project_id_key"))
+                conn.execute(text("DROP INDEX IF EXISTS ix_chat_sessions_project_id"))
+                # Concept source attribution: which document a concept was
+                # first extracted from (NULL = predates tracking / chat-made).
+                conn.execute(text("ALTER TABLE concepts ADD COLUMN IF NOT EXISTS document_id UUID"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_concepts_document_id ON concepts (document_id)"))
+                conn.execute(text("DO $$ BEGIN ALTER TABLE concepts ADD CONSTRAINT concepts_document_id_fkey FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE SET NULL; EXCEPTION WHEN duplicate_object THEN NULL; END $$"))
+                # Tutor follow-ups: clickable suggested questions per assistant message.
+                conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS suggested_questions JSONB"))
+                # Auth redesign: display name collected at registration.
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(120)"))
                 conn.commit()
             logger.success("Database connected and tables created.")
             break
@@ -68,7 +92,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -84,6 +109,8 @@ app.include_router(quiz_router, prefix="/api/v1/spaces/{space_id}/projects", tag
 app.include_router(quiz_flat_router, prefix="/api/v1", tags=["Quiz"])
 app.include_router(mastery_router, prefix="/api/v1", tags=["Mastery"])
 app.include_router(assignment_router, prefix="/api/v1/spaces/{space_id}/projects", tags=["Assignments"])
+app.include_router(analytics_router, prefix="/api/v1", tags=["Analytics"])
+app.include_router(admin_router, prefix="/api/v1", tags=["Admin"])
 
 @app.get("/health")
 async def health_check():

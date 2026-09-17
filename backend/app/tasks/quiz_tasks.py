@@ -6,9 +6,44 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.db.session import SessionLocal
 import app.db.base  # noqa: F401
 from app.db.models.assessment import Quiz, QuizQuestion, Concept
+from app.db.models.project import Project
+from app.db.models.space import Space
 from app.schemas.quiz import OpenEndedEvaluation
 from app.tasks.celery_app import celery_app
 from app.ai.llm import get_llm
+from app.services.analytics_service import record_mastery_snapshot
+
+
+# Answers that mean "no attempt": blank, whitespace-only, or an explicit
+# no-answer token. These must always score 0 — never reach the LLM grader,
+# which can otherwise award points for an empty response.
+_NO_ANSWER_TOKENS = frozenset({
+    "", "n/a", "na", "idk", "dont know", "don't know", "do not know",
+    "no idea", "?", "-", "--", "...", "....", "no answer", "skip", "skipped",
+})
+
+
+def _is_blank_open_answer(text) -> bool:
+    if text is None:
+        return True
+    s = str(text).strip()
+    if not s:
+        return True
+    norm = " ".join(s.lower().split())
+    if norm in _NO_ANSWER_TOKENS:
+        return True
+    # A single character carries no gradable content for open-ended.
+    if len(s) < 2:
+        return True
+    return False
+
+
+def _blank_open_evaluation() -> dict:
+    return {
+        "score": 0,
+        "feedback": "No answer provided. Score 0 — write your own response to earn points.",
+        "missing_concepts": [],
+    }
 
 
 @celery_app.task(name="quiz.evaluate", bind=True, max_retries=3)
@@ -42,31 +77,37 @@ def evaluate_quiz_task(self, quiz_question_id: str, user_answer: str) -> str:
                 "missing_concepts": [] if correct else ["review-target-concept"],
             }
         else:
-            llm = get_llm()
-            last_err = None
-            evaluation = None
-            for attempt in range(3):
-                try:
-                    res = llm.invoke(
-                        [
-                            SystemMessage(
-                                content="Evaluate the open-ended answer for accuracy, missing concepts, and reasoning. "
-                                'Return ONLY JSON: {"score": integer 0-100, "feedback": "string", "missing_concepts": ["string"]}.'
-                            ),
-                            HumanMessage(
-                                content=f"Question: {question.question_text}\nAnswer: {user_answer}"
-                            ),
-                        ]
-                    )
-                    raw = res.content.strip().replace("```json", "").replace("```", "").strip()
-                    validated = OpenEndedEvaluation(**json.loads(raw))
-                    evaluation = validated.model_dump()
-                    break
-                except Exception as e:
-                    last_err = e
-                    logger.warning(f"[quiz.evaluate] retry {attempt + 1}/3 q={quiz_question_id}: {e}")
-            if evaluation is None:
-                raise last_err or RuntimeError("evaluation failed")
+            # Blank / no-attempt answers are always 0 — never send to the LLM.
+            if _is_blank_open_answer(user_answer):
+                evaluation = _blank_open_evaluation()
+            else:
+                llm = get_llm()
+                last_err = None
+                evaluation = None
+                for attempt in range(3):
+                    try:
+                        res = llm.invoke(
+                            [
+                                SystemMessage(
+                                    content="Evaluate the open-ended answer for accuracy, missing concepts, and reasoning. "
+                                    "Be strict: award points only for demonstrated correctness, never for effort or verbosity. "
+                                    "An empty, off-topic, or 'I don't know' answer always scores 0. "
+                                    'Return ONLY JSON: {"score": integer 0-100, "feedback": "string", "missing_concepts": ["string"]}.'
+                                ),
+                                HumanMessage(
+                                    content=f"Question: {question.question_text}\nIdeal answer: {question.correct_answer}\nAnswer: {user_answer}"
+                                ),
+                            ]
+                        )
+                        raw = res.content.strip().replace("```json", "").replace("```", "").strip()
+                        validated = OpenEndedEvaluation(**json.loads(raw))
+                        evaluation = validated.model_dump()
+                        break
+                    except Exception as e:
+                        last_err = e
+                        logger.warning(f"[quiz.evaluate] retry {attempt + 1}/3 q={quiz_question_id}: {e}")
+                if evaluation is None:
+                    raise last_err or RuntimeError("evaluation failed")
 
         question.evaluation = evaluation
         db.commit()
@@ -99,9 +140,31 @@ def update_mastery_from_quiz_task(quiz_question_id: str) -> str:
             return "skipped:concept-gone"
         score = float((question.evaluation or {}).get("score", 0))
         score = max(0.0, min(100.0, score))
-        concept.mastery_level = round((float(concept.mastery_level) * 0.7) + (score * 0.3), 2)
+        old_mastery = float(concept.mastery_level)
+        concept.mastery_level = round(old_mastery * 0.7 + score * 0.3, 2)
         concept.last_assessed_at = datetime.utcnow()
+        concept_created = concept.created_at
+        concept_id = concept.id
+        new_mastery = concept.mastery_level
         db.commit()
+        # Growth history (separate transaction; mastery math above unchanged).
+        try:
+            quiz = db.get(Quiz, question.quiz_id)
+            project = db.get(Project, quiz.project_id) if quiz else None
+            space = db.get(Space, project.space_id) if project else None
+            record_mastery_snapshot(
+                db,
+                user_id=space.user_id if space else None,
+                project_id=project.id if project else None,
+                concept_id=concept_id,
+                new_mastery=new_mastery,
+                source="quiz",
+                source_id=question.id,
+                previous_mastery=old_mastery,
+                baseline_at=concept_created,
+            )
+        except Exception as he:
+            logger.warning(f"[mastery.quiz] history skipped q={quiz_question_id}: {he}")
         logger.success(f"[mastery.quiz] concept={concept.name} new={concept.mastery_level}")
         return f"updated:{concept.mastery_level}"
     except Exception as e:
@@ -146,6 +209,9 @@ def _evaluate_mcq(question: QuizQuestion, user_answer: str) -> dict:
 
 
 def _evaluate_open(question: QuizQuestion, user_answer: str) -> dict:
+    # Blank / no-attempt answers are always 0 — never send to the LLM.
+    if _is_blank_open_answer(user_answer):
+        return _blank_open_evaluation()
     llm = get_llm()
     last_err = None
     for attempt in range(3):
@@ -154,9 +220,11 @@ def _evaluate_open(question: QuizQuestion, user_answer: str) -> dict:
                 [
                     SystemMessage(
                         content="Evaluate the open-ended answer for accuracy, missing concepts, and reasoning. "
+                        "Be strict: award points only for demonstrated correctness, never for effort or verbosity. "
+                        "An empty, off-topic, or 'I don't know' answer always scores 0. "
                         'Return ONLY JSON: {"score": integer 0-100, "feedback": "string", "missing_concepts": ["string"]}.'
                     ),
-                    HumanMessage(content=f"Question: {question.question_text}\nAnswer: {user_answer}"),
+                    HumanMessage(content=f"Question: {question.question_text}\nIdeal answer: {question.correct_answer}\nAnswer: {user_answer}"),
                 ]
             )
             raw = res.content.strip().replace("```json", "").replace("```", "").strip()
@@ -231,7 +299,15 @@ def evaluate_submission_task(self, quiz_id: str) -> str:
             .all()
         )
         for q in questions:
-            if not (q.user_answer or "").strip() or q.evaluation is not None:
+            if q.evaluation is not None:
+                continue
+            # Unanswered or blank answers count as 0 — skipping them would
+            # inflate the average (e.g. 2/5 answered correctly showing as 100).
+            if q.user_answer is None:
+                q.user_answer = ""
+            if q.question_type != "multiple_choice" and _is_blank_open_answer(q.user_answer):
+                q.evaluation = _blank_open_evaluation()
+                db.commit()
                 continue
             try:
                 if q.question_type == "multiple_choice":

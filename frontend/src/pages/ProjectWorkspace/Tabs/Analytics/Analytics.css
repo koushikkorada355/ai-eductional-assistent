@@ -1,4 +1,17 @@
-.analytics-empty { text-align: center; padding: 64px 32px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
-.analytics-icon { color: var(--primary); display: inline-flex; margin-bottom: 6px; }
-.analytics-empty h3 { font-size: 1.6rem; }
-.analytics-empty p { max-width: 560px; font-size: 1.05rem; }
+/* Project Analytics — kept custom CSS, justified:
+ * 1. SVG growth-chart internals (grid lines, axis labels, line, dots).
+ * 2. Distribution legend swatches + stacked-bar segments.
+ * Everything structural (cards, grids, filters, rows) is Tailwind. */
+.growth-chart svg { width: 100%; height: auto; display: block; }
+.growth-chart .grid-line { stroke: var(--border); stroke-width: 1; }
+.growth-chart .axis-label { fill: var(--muted); font-size: 11px; font-family: var(--font-body); }
+.growth-chart .growth-line { fill: none; stroke: var(--primary); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.growth-chart .growth-dot { fill: var(--primary); stroke: #fff; stroke-width: 1.5; }
+.dot-s { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.dot-s.strong { background: var(--accent); }
+.dot-s.learning { background: var(--primary); }
+.dot-s.weak { background: var(--danger); }
+.stacked-bar { display: flex; height: 24px; border-radius: var(--radius-full); overflow: hidden; background: var(--bg); }
+.stacked-bar .seg.strong { background: var(--accent); }
+.stacked-bar .seg.learning { background: var(--primary); }
+.stacked-bar .seg.weak { background: var(--danger); }

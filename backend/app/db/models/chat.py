@@ -9,11 +9,13 @@ class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String(200), nullable=False, default="New conversation")
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    project = relationship("Project", back_populates="chat_session")
+    project = relationship("Project", back_populates="chat_sessions")
     messages = relationship("Message", back_populates="chat_session", cascade="all, delete-orphan", passive_deletes=True, order_by="Message.created_at")
 
 class Message(Base):
@@ -24,6 +26,7 @@ class Message(Base):
     role = Column(String, nullable=False)
     content = Column(Text, nullable=False)
     citations = Column(JSONB, nullable=True)
+    suggested_questions = Column(JSONB, nullable=True, default=list)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     chat_session = relationship("ChatSession", back_populates="messages")

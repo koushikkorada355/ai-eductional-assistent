@@ -6,6 +6,8 @@ from langchain_core.messages import BaseMessage
 class TutorState(TypedDict):
     user_question: str
     project_id: str
+    user_id: str
+    chat_session_id: str
     messages: Annotated[List[BaseMessage], add_messages]
     retrieved_context: List[str]
     retrieved_sources: List[dict]
@@ -13,3 +15,13 @@ class TutorState(TypedDict):
     final_answer: str
     citations: List[dict]
     intent: str
+    # Follow-up questions shown as clickable chips under the AI response.
+    suggested_questions: List[str]
+    # Quick-action directive (see app.ai.actions): prompt-shaping hint for
+    # generate_answer only. Retrieval always runs on user_question.
+    action_hint: str
+    # Persistent learning context (never overrides document evidence).
+    conversation_summary: str
+    relevant_learning_context: List[str]
+    relevant_assessment_context: str
+    user_name: str
