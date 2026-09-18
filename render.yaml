@@ -9,14 +9,13 @@
 # redeploy the frontend (Vite bakes it at build time).
 
 services:
-  # Single server: FastAPI web + Celery worker in ONE container
-  # (backend/Dockerfile.single + backend/start-single.sh). One container =
-  # web and worker share the same filesystem, so uploads always work.
+  # Single server: FastAPI web + Celery worker in ONE container.
+  # Built from ./Dockerfile at the repo root (Render's default location) —
+  # leave "Dockerfile Path" empty in the dashboard. One container = web and
+  # worker share the same filesystem, so uploads always work.
   - type: web
     name: ai-study-companion
     runtime: docker
-    dockerfilePath: ./backend/Dockerfile.single
-    dockerContext: ./backend
     # Free sleeps on idle (worker sleeps too -> uploads stall). Starter keeps
     # web + worker always on.
     plan: starter

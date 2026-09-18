@@ -1,0 +1,24 @@
+# Keep the Docker build context small: only backend/ is needed for the
+# single-server image. Without this, frontend/node_modules (hundreds of MB)
+# would be uploaded to Render on every build.
+.git/
+.git-corrupted/
+frontend/
+figmadesign/
+docs/
+instruction.md
+prompt.md
+Project_Requirements.pdf
+README.md
+*.pdf
+backend/uploads/
+backend/__pycache__/
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/venv/
+**/.pytest_cache/
+**/.mypy_cache/
+**/htmlcov/
+**/.coverage
+.env

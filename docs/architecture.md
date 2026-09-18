@@ -1,6 +1,5 @@
 # Architecture — AI Study Companion
 
-> Describes WHAT IS ACTUALLY BUILT, verified against code. File pointers use `backend/` and `frontend/` paths.
 
 ---
 
@@ -10,12 +9,6 @@
 
 **Problem solved:** generic chatbots answer from the open internet and forget you. Students need answers grounded in *their own materials*, tied to *their* concepts, with memory of *their* progress across sessions.
 
-**Why more than a chatbot:**
-
-- Retrieval is strictly filtered to the current project (`DocumentChunk.project_id == ...` at SQL level, `backend/app/ai/nodes/tutor_nodes.py:360-366`).
-- Answers must carry `[Source: Page N]` citations matched to retrieved chunks (`_build_citations`, `tutor_nodes.py:830-877`); insufficient evidence routes to a fixed refusal (`reject_answer`, `tutor_graph.py:26-31`).
-- Every turn also loads persistent learner memory (goals, facts, weaknesses, assessment stats) without shipping full history (`retrieve_learning_context`, `tutor_nodes.py:426-553`).
-- Quiz results feed a mastery estimate per concept (70/30 blend) plus append-only history that powers growth trends (`backend/app/tasks/quiz_tasks.py:132-186`).
 
 ### The learning loop (as implemented)
 
@@ -138,54 +131,16 @@ Separation: routers validate (Pydantic schemas in `app/schemas/`) and enforce ow
 
 All tables are created by `create_all` (no Alembic). pgvector `Vector(768)` on `document_chunks.embedding`.
 
-```mermaid
-erDiagram
-    users ||--o{ spaces : owns
-    spaces ||--o{ projects : contains
-    projects ||--o{ documents : has
-    documents ||--o{ document_chunks : split_into
-    projects ||--o{ chat_sessions : has
-    chat_sessions ||--o{ messages : contains
-    chat_sessions ||--o{ conversation_summaries : summarized_by
-    projects ||--o{ concepts : extracts
-    documents ||--o{ concepts : sources
-    projects ||--o{ quizzes : has
-    quizzes ||--o{ quiz_questions : contains
-    concepts ||--o{ quiz_questions : tests
-    projects ||--o{ assignments : has
-    assignments ||--o{ assignment_questions : contains
-    assignments ||--o{ assignment_submissions : receives
-    users ||--o{ user_concept_mastery : scores
-    concepts ||--o{ user_concept_mastery : measured
-    users ||--o{ quiz_history : attempts
-    users ||--o{ mastery_history : snapshots
-    projects ||--o{ mastery_history : tracks
-    users ||--o{ learning_contexts : remembers
-    projects ||--o{ learning_contexts : scopes
-    users ||--o{ learning_events : emits
-    projects ||--o{ learning_events : scopes
-    ai_usage }o--|| users : "nullable, NO FK"
-    ai_usage }o--|| projects : "nullable, NO FK"
-```
+`
 
 Key fields: `User(id, email unique, hashed_password, name, role, is_active)`; `Space(user_id FK CASCADE)`; `Project(space_id FK CASCADE, learning_goal, overall_progress)`; `Document(project_id, file_name, file_path, file_hash(64), status queued|processing|ready|failed)`; `DocumentChunk(document_id, project_id, content, page_number, embedding)`; `ChatSession(project_id, title, is_active)` / `Message(chat_session_id, role, content, citations JSONB, suggested_questions JSONB)`; `Concept(project_id, document_id SET NULL, name, description, mastery_level, last_assessed_at)`; `Quiz(project_id, name, goal, status)` / `QuizQuestion(quiz_id, concept_id SET NULL, question_type, question_text, options JSONB, correct_answer, user_answer, evaluation JSONB)`; `Assignment(+concept_ids JSONB, status)` / `AssignmentQuestion` / `AssignmentSubmission(score, feedback JSONB)`; `UserConceptMastery(user,concept unique, mastery_score, last_feedback)`; `QuizHistory(user, concept SET NULL, question_text, is_correct)`; `MasteryHistory(user, project, concept, mastery, source quiz|chat|baseline, source_id, unique(concept,source,source_id))`; `LearningContext(user, project, type goal|preference|strength|weakness|repeated_mistake|tutor_context|user_fact, concept_id, content, confidence, source, source_id)`; `ConversationSummary(chat_session_id unique, summary, last_message_id)`; `AIUsage(feature, provider, model, latency_ms, success, error, user_id, project_id [no FKs], prompt/completion/total tokens, cost_usd, calls)`; `LearningEvent(user_id, project_id, type, text, event_key unique)`. There is **no recommendations table** and **no separate events-bus table** beyond `LearningEvent`.
 
-**Project-level data isolation:** every nested route resolves `get_owned_project(space_id, project_id)` (space exists → space owned by caller → project in that space) and flat routes resolve `get_owned_project_by_id` / `get_owned_quiz` (walk quiz → project → space → owner); retrieval adds `DocumentChunk.project_id == <uuid>` at SQL; conversation summaries are re-scoped to the requesting project (`tutor_nodes.py:485-496`); background tasks propagate server-side project/user IDs instead of client claims.
 
----
+
 
 ## G. Project Data Isolation
 
-```mermaid
-flowchart TD
-    U[Authenticated user<br/>JWT sub] --> SP[Space: space.user_id == user.id<br/>else 403]
-    SP --> P[Project: project.space_id == space.id<br/>else 404]
-    P --> M[Materials: document.project_id]
-    P --> K[Knowledge: chunk.project_id SQL filter]
-    P --> C[Conversations: session.project_id + summary re-scope]
-    P --> A[Assessments: quiz/assignment.project_id]
-    P --> MS[Mastery: concept.project_id + history.project_id]
-```
+
 
 Enforcement points: `app/api/deps.py:38-98` (all ownership deps), conversation guard `tutor.py:119-130`, document guard `materials.py:38-58`, retrieval filter `tutor_nodes.py:360-366` + `quiz_nodes.py:49-55`, summary scoping `tutor_nodes.py:485-496`. Cross-user access returns 403/404; no endpoint trusts a client-supplied user ID.
 
@@ -496,112 +451,8 @@ Engineer runbook: slow answer → check `AIUsage.latency_ms` by feature/model + 
 
 ---
 
-## U. Deployment Architecture
 
-```mermaid
-flowchart TB
-    subgraph V[Vercel]
-        FE[Frontend SPA<br/>npm run build → dist<br/>rewrites /* → /index.html]
-    end
-    subgraph R[Railway]
-        BE[Backend<br/>python:3.11-slim + tesseract-ocr<br/>uvicorn --port $PORT]
-        WK[Worker<br/>same image<br/>celery worker]
-    end
-    subgraph EXT[External]
-        NEON[(Neon PostgreSQL 15 + pgvector)]
-        RED[(Redis 7)]
-        GEM[Gemini embeddings]
-        INC[Inception Mercury LLM]
-    end
-    FE -->|VITE_API_BASE_URL| BE
-    BE --> NEON
-    BE --> RED
-    RED --> WK
-    WK --> NEON
-    BE --> INC
-    BE --> GEM
-    WK --> INC
-    WK --> GEM
-```
-
-Actual config: `backend/Dockerfile` (slim + OCR binary + `requirements.txt`, Railway `$PORT` CMD); `frontend/Dockerfile` is dev-only (`npm run dev`); `docker-compose.yml` runs backend (`--reload`, `./backend:/code`), worker, redis (healthcheck), frontend; local Postgres service is commented out (Neon used); `frontend/vercel.json` (build `dist`, SPA rewrites). Env: `DATABASE_URL, SECRET_KEY(+JWT alias), INCEPTION_API_KEY(+MODEL/BASE_URL), GOOGLE_API_KEY, REDIS_URL, GROQ_* (standby), LANGCHAIN_* (optional tracing), ADMIN_EMAIL/PASSWORD/NAME, FRONTEND_URL`. Secrets stay in env, never in code.
-
-Railway note: local `uploads/` is ephemeral and git/docker-ignored; the folder is auto-created at runtime (`os.makedirs(..., exist_ok=True)`). For durable multi-instance uploads use a Railway Volume at `/code/uploads` (backend + worker) or object storage.
-
----
-
-## V. API Overview
-
-Prefix `/api/v1` (+ `GET /health`). Auth: Bearer JWT except register/login/health.
-
-Pagination: every GET list endpoint accepts `?page=1&page_size=N` (clamped to 100) and returns `{items, total, page, page_size, pages}` (`backend/app/utils/pagination.py`). Admin users/spaces/projects additionally accept `?q=` search; quizzes/assignments envelopes carry an exact `summary` so stat cards stay correct without loading all rows. The frontend normalizes via `src/utils/paging.js` and renders a shared `Pagination` control (`components/ui/ui.jsx`).
-
-| Method | Endpoint | Purpose | Auth | Project scoped |
-| ------ | -------- | ------- | ---- | -------------- |
-| POST | `/auth/register` | Create user + seed event | No | No |
-| POST | `/auth/login` | Verify password → JWT | No | No |
-| GET | `/auth/me` | Current user | Yes | No |
-| POST / GET | `/spaces/` | Create / list own spaces | Yes | No |
-| GET / PUT / PATCH / DELETE | `/spaces/{sid}` | Read / update / delete space | Owner | No |
-| POST / GET | `/spaces/{sid}/projects/` | Create / list projects | Owner | Yes (space) |
-| GET / PUT / PATCH / DELETE | `/spaces/{sid}/projects/{pid}` | Project CRUD | Owner | Yes |
-| GET / POST | `/spaces/{sid}/projects/{pid}/conversations` | List / create conversation | Owner | Yes |
-| PATCH / DELETE | `.../conversations/{cid}` | Rename / delete conversation | Owner | Yes |
-| GET | `.../conversations/{cid}/messages` | Message history | Owner | Yes |
-| POST | `.../conversations/{cid}/tutor` | Tutor turn `{question, action?}` | Owner | Yes |
-| POST | `.../{pid}/tutor` | Legacy tutor turn | Owner | Yes |
-| GET | `.../{pid}/chat`, `.../{pid}/messages` | Legacy history | Owner | Yes |
-| POST | `.../{pid}/upload-pdf` | Upload PDF (409 on dupe) | Owner | Yes |
-| GET | `.../{pid}/documents` | List documents + status | Owner | Yes |
-| GET | `.../{pid}/documents/{did}/evidence` | Top chunk excerpts | Owner | Yes |
-| POST | `.../{pid}/documents/{did}/retry` | Re-queue processing | Owner | Yes |
-| DELETE | `.../{pid}/documents/{did}` | Delete doc + file | Owner | Yes |
-| POST | `.../{pid}/quizzes/start` | Nested quiz start | Owner | Yes |
-| POST | `.../{pid}/quizzes/{qid}/answer` | Step answer (graph path) | Owner | Yes |
-| GET | `.../{pid}/mastery` | Concept mastery list | Owner | Yes |
-| POST | `/projects/{pid}/quiz/start` | Batch quiz start `{name, goal, num_mcq, num_open}` | Owner | Yes |
-| PATCH | `/quiz/{qid}/questions/{qqid}/save` | Save draft answer | Owner | Via quiz |
-| POST | `/quiz/{qid}/submit` | Grade all + mastery + complete | Owner | Via quiz |
-| POST | `/projects/{pid}/quizzes/start-legacy` | Legacy start | Owner | Yes |
-| POST | `/quiz/{qid}/answer` | Legacy step answer | Owner | Via quiz |
-| GET | `/projects/{pid}/quizzes`, `/quiz/{qid}` | List / detail (answers hidden until completed) | Owner | Yes |
-| POST | `/quiz/next`, `/quiz/submit` | Legacy mastery-engine quiz | Yes | Body IDs |
-| GET | `/mastery/state`, `/mastery/history`, `/recommendations` | Legacy mastery + LLM recommender | Yes | Query |
-| GET | `.../{pid}/concepts` | List concepts | Owner | Yes |
-| POST / GET | `.../{pid}/assignments` | Create / list assignments | Owner | Yes |
-| GET / POST | `.../{pid}/assignments/{aid}`, `.../submit` | Detail / submit | Owner | Yes |
-| GET | `/analytics/overview` | Global analytics | Yes | No |
-| GET | `/spaces/{sid}/projects/{pid}/analytics` | Project analytics + inline recommendations | Owner | Yes |
-| GET | `/admin/overview\|users\|users/{id}\|spaces\|projects\|activity\|learning\|jobs\|evaluations\|ai-usage\|health` | Ops center (11 GETs) | Admin | No |
-
----
-
-## W. Complete Architecture Diagram
-
-```mermaid
-flowchart TB
-    U[User] --> FE[Frontend<br/>React + Redux + Router]
-    FE --> API[Backend API<br/>FastAPI routers]
-    API --> AUTH[Auth / Ownership<br/>JWT + get_owned_* + require_admin]
-    AUTH --> PC[Project context<br/>space → project → materials]
-    PC --> BL[Business logic<br/>services: learning, analytics, events, metering]
-    BL --> LG[LangGraph]
-    LG --> CTX[Context: summary + memory + assessment]
-    LG --> RET[Retrieval: Gemini embed → pgvector top-5]
-    LG --> TUT["Tutor: grade to answer-plus-cite or refuse"]
-    LG --> QUIZ[Quiz: weakest-first batch → strict grading]
-    LG --> ASM[Assessment → 70/30 mastery + history]
-    ASM --> PG[(PostgreSQL + pgvector)]
-    RET --> PG
-    BL --> Q[(Redis)]
-    Q --> W[Celery worker<br/>ingest, grade, summarize, extract]
-    W --> PG
-    BL --> OBS[Analytics / Observability<br/>growth, events, ai_usage, admin]
-```
-
----
-
-## X. Architecture Decisions
+## U. Architecture Decisions
 
 | Decision | Why | Trade-off |
 | -------- | --- | --------- |
@@ -651,3 +502,4 @@ flowchart TB
 | Structured tool interaction | Prompt-shaping + Pydantic validation; no tool-calling layer | Partial |
 | Table/diagram understanding | Text/OCR only; no structural extraction | Partial |
 | Streaming / caching / pagination | Not implemented (stated in README) | Not Implemented |
+
