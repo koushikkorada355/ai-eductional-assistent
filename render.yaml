@@ -1,0 +1,76 @@
+# Render Blueprint: AI Study Companion
+# Architecture: Vercel (frontend) + Render (backend+worker, single Docker
+# container) + Neon (Postgres) + Render Key Value (Redis).
+#
+# Deploy: push this file, then Render Dashboard -> New -> Blueprint -> select
+# repo. Fill the `sync: false` values once (same values as the old Railway
+# env), set FRONTEND_URL to the Vercel URL, deploy.
+# After deploy: copy the service URL into Vercel as VITE_API_BASE_URL and
+# redeploy the frontend (Vite bakes it at build time).
+
+services:
+  # Single server: FastAPI web + Celery worker in ONE container
+  # (backend/Dockerfile.single + backend/start-single.sh). One container =
+  # web and worker share the same filesystem, so uploads always work.
+  - type: web
+    name: ai-study-companion
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile.single
+    dockerContext: ./backend
+    # Free sleeps on idle (worker sleeps too -> uploads stall). Starter keeps
+    # web + worker always on.
+    plan: starter
+    healthCheckPath: /health
+    # Persistent uploads (survives restarts/redeploys). Must match UPLOAD_DIR.
+    disk:
+      name: uploads
+      mountPath: /data/uploads
+      sizeGB: 1
+    envVars:
+      - key: UPLOAD_DIR
+        value: /data/uploads
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CELERY_CONCURRENCY
+        value: 1
+      - key: MAX_UPLOAD_MB
+        value: 25
+      # Public Vercel frontend URL (comma-separated allowed) for CORS.
+      - key: FRONTEND_URL
+        sync: false
+      # Neon Postgres (keep the same value as Railway had).
+      - key: DATABASE_URL
+        sync: false
+      # JWT signing secret (or JWT_SECRET_KEY — either works).
+      - key: SECRET_KEY
+        sync: false
+      # Wired automatically to the Key Value service below (internal URL).
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: ai-study-companion-redis
+          property: connectionString
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: INCEPTION_API_KEY
+        sync: false
+      - key: INCEPTION_MODEL
+        sync: false
+      - key: INCEPTION_BASE_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_NAME
+        sync: false
+
+  # Celery broker + result backend. noeviction = never drop queued jobs.
+  - type: keyvalue
+    name: ai-study-companion-redis
+    plan: free
+    maxmemoryPolicy: noeviction

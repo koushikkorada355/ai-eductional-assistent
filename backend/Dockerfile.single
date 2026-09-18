@@ -1,0 +1,37 @@
+# Single-server production image for Render: FastAPI web + Celery worker
+# run together in ONE container (see start-single.sh).
+#
+# Why one container: Render disks are per-service (no shared volume between
+# a separate web + worker), and uploads written by web must be visible to
+# the worker. Same container = same filesystem = no shared-volume problem.
+#
+# Local docker-compose is untouched (it still runs split backend/worker
+# services with --reload). This Dockerfile is only for Render deploys.
+FROM python:3.11-slim
+
+WORKDIR /code
+
+COPY requirements.txt ./
+# tesseract-ocr binary: required by pytesseract for the scanned-image OCR
+# fallback in app/utils/pdf_parser.py. English only keeps the image small.
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+# Celery refuses root with a noisy SecurityWarning (harmless in Docker but
+# buries the real crash line in deploy logs). Containers run as root by
+# default — silence it explicitly.
+ENV C_FORCE_ROOT=true
+
+# Render mounts a persistent disk at /data/uploads (see render.yaml) so
+# uploaded PDFs survive restarts/redeploys.
+ENV UPLOAD_DIR=/data/uploads
+
+RUN chmod +x ./start-single.sh
+
+EXPOSE 8000
+
+# Honors $PORT (Render injects it). Starts worker + web together.
+CMD ["sh", "./start-single.sh"]
