@@ -4,6 +4,7 @@ API flow: create row (generating) -> task -> ready; submit answers
 (evaluating) -> task -> submitted. Frontend polls the detail endpoint.
 """
 import asyncio
+import time
 import uuid
 from loguru import logger
 from app.db.session import SessionLocal
@@ -11,6 +12,10 @@ import app.db.base  # noqa: F401
 from app.db.models.assessment import Assignment
 from app.tasks.celery_app import celery_app
 from app.services.ai_usage_service import track_ai_call
+
+
+def _tag(name: str, jid: str) -> str:
+    return f"[JOB {name}|id={str(jid)[:8]}]"
 
 
 def _run_graph(state: dict, thread_id: str) -> dict:
@@ -24,22 +29,28 @@ def _run_graph(state: dict, thread_id: str) -> dict:
 @celery_app.task(name="assignment.generate_batch", bind=True, max_retries=2)
 @track_ai_call("assignment_generation")
 def generate_assignment_task(self, assignment_id: str, num_questions: int = 5) -> str:
-    logger.info(f"[assignment.task.generate] assignment={assignment_id} n={num_questions} entry")
+    t0 = time.monotonic()
+    tag = _tag("assignment.generate", assignment_id)
+    logger.info(f"{tag} received n={num_questions}")
     db = SessionLocal()
     try:
         try:
             auuid = uuid.UUID(assignment_id)
         except ValueError:
+            logger.error(f"{tag} invalid uuid")
             return "failed:invalid-id"
         assignment = db.get(Assignment, auuid)
         if assignment is None:
+            logger.error(f"{tag} not found in DB")
             return "failed:not-found"
         if assignment.status != "generating":
+            logger.info(f"{tag} skipped status={assignment.status}")
             return f"skipped:{assignment.status}"
         project_id = str(assignment.project_id)
         concept_ids = [str(c) for c in (assignment.concept_ids or [])]
         title = assignment.title or ""
         db.close()
+        logger.info(f"{tag} phase=graph start project={project_id[:8]} concepts={len(concept_ids)}")
         result = _run_graph(
             {
                 "assignment_id": assignment_id,
@@ -53,9 +64,10 @@ def generate_assignment_task(self, assignment_id: str, num_questions: int = 5) -
         )
         if result.get("error"):
             raise RuntimeError(result["error"])
+        logger.success(f"{tag} DONE in {time.monotonic() - t0:.1f}s")
         return "ready"
     except Exception as e:
-        logger.error(f"[assignment.task.generate] assignment={assignment_id} failed: {e}")
+        logger.opt(exception=True).error(f"{tag} FAILED after {time.monotonic() - t0:.1f}s: {type(e).__name__}: {e}")
         try:
             raise self.retry(exc=e, countdown=15)
         except self.MaxRetriesExceededError:
@@ -82,15 +94,19 @@ def generate_assignment_task(self, assignment_id: str, num_questions: int = 5) -
 @celery_app.task(name="assignment.evaluate_submission", bind=True, max_retries=2)
 @track_ai_call("assignment_evaluation")
 def evaluate_assignment_task(self, assignment_id: str, answers: dict) -> str:
-    logger.info(f"[assignment.task.evaluate] assignment={assignment_id} entry")
+    t0 = time.monotonic()
+    tag = _tag("assignment.evaluate", assignment_id)
+    logger.info(f"{tag} received answers={len(answers or {})}")
     db = SessionLocal()
     try:
         try:
             auuid = uuid.UUID(assignment_id)
         except ValueError:
+            logger.error(f"{tag} invalid uuid")
             return "failed:invalid-id"
         assignment = db.get(Assignment, auuid)
         if assignment is None:
+            logger.error(f"{tag} not found in DB")
             return "failed:not-found"
         project_id = str(assignment.project_id)
         concept_ids = [str(c) for c in (assignment.concept_ids or [])]
@@ -106,9 +122,10 @@ def evaluate_assignment_task(self, assignment_id: str, answers: dict) -> str:
         )
         if result.get("error"):
             raise RuntimeError(result["error"])
+        logger.success(f"{tag} DONE in {time.monotonic() - t0:.1f}s score={result.get('score', 0)}/{result.get('total', 0)}")
         return f"submitted:{result.get('score', 0)}/{result.get('total', 0)}"
     except Exception as e:
-        logger.error(f"[assignment.task.evaluate] assignment={assignment_id} failed: {e}")
+        logger.opt(exception=True).error(f"{tag} FAILED after {time.monotonic() - t0:.1f}s: {type(e).__name__}: {e}")
         try:
             raise self.retry(exc=e, countdown=15)
         except self.MaxRetriesExceededError:

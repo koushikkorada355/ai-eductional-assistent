@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 from datetime import datetime
 from loguru import logger
@@ -47,10 +48,16 @@ def _blank_open_evaluation() -> dict:
     }
 
 
+def _tag(name: str, jid: str) -> str:
+    return f"[JOB {name}|id={str(jid)[:8]}]"
+
+
 @celery_app.task(name="quiz.evaluate", bind=True, max_retries=3)
 @track_ai_call("quiz_evaluation")
 def evaluate_quiz_task(self, quiz_question_id: str, user_answer: str) -> str:
-    logger.info(f"[quiz.evaluate] question_id={quiz_question_id}")
+    t0 = time.monotonic()
+    tag = _tag("quiz.evaluate", quiz_question_id)
+    logger.info(f"{tag} received answer_len={len(user_answer or '')}")
     db = SessionLocal()
     try:
         qid = uuid.UUID(quiz_question_id)
@@ -113,14 +120,14 @@ def evaluate_quiz_task(self, quiz_question_id: str, user_answer: str) -> str:
 
         question.evaluation = evaluation
         db.commit()
-        logger.success(f"[quiz.evaluate] q={quiz_question_id} score={evaluation.get('score')}")
+        logger.success(f"{tag} DONE score={evaluation.get('score')} in {time.monotonic() - t0:.1f}s")
 
         # chain mastery update
         update_mastery_from_quiz_task.delay(str(question.id))
         return f"evaluated:{evaluation.get('score')}"
     except Exception as e:
         db.rollback()
-        logger.error(f"[quiz.evaluate] failed q={quiz_question_id}: {e}")
+        logger.opt(exception=True).error(f"{tag} FAILED after {time.monotonic() - t0:.1f}s: {type(e).__name__}: {e}")
         try:
             raise self.retry(exc=e, countdown=10)
         except self.MaxRetriesExceededError:
@@ -131,7 +138,9 @@ def evaluate_quiz_task(self, quiz_question_id: str, user_answer: str) -> str:
 
 @celery_app.task(name="mastery.update_from_quiz")
 def update_mastery_from_quiz_task(quiz_question_id: str) -> str:
-    logger.info(f"[mastery.quiz] question_id={quiz_question_id}")
+    t0 = time.monotonic()
+    tag = _tag("mastery.update_from_quiz", quiz_question_id)
+    logger.info(f"{tag} received")
     db = SessionLocal()
     try:
         question = db.get(QuizQuestion, uuid.UUID(quiz_question_id))
@@ -176,11 +185,11 @@ def update_mastery_from_quiz_task(quiz_question_id: str) -> str:
                 recompute_project_progress(db, _quiz.project_id)
         except Exception as pe:
             logger.warning(f"[mastery.quiz] progress recompute skipped q={quiz_question_id}: {pe}")
-        logger.success(f"[mastery.quiz] concept={concept.name} new={concept.mastery_level}")
+        logger.success(f"{tag} DONE concept={concept.name} new={concept.mastery_level} in {time.monotonic() - t0:.1f}s")
         return f"updated:{concept.mastery_level}"
     except Exception as e:
         db.rollback()
-        logger.error(f"[mastery.quiz] failed q={quiz_question_id}: {e}")
+        logger.opt(exception=True).error(f"{tag} FAILED after {time.monotonic() - t0:.1f}s: {type(e).__name__}: {e}")
         return f"failed:{e}"
     finally:
         db.close()
@@ -249,7 +258,9 @@ def _evaluate_open(question: QuizQuestion, user_answer: str) -> dict:
 @celery_app.task(name="quiz.generate_batch", bind=True, max_retries=2)
 @track_ai_call("quiz_generation")
 def generate_batch_task(self, quiz_id: str, num_mcq: int = 3, num_open: int = 2) -> str:
-    logger.info(f"[quiz.batch_task] quiz={quiz_id} mcq={num_mcq} open={num_open} entry")
+    t0 = time.monotonic()
+    tag = _tag("quiz.generate_batch", quiz_id)
+    logger.info(f"{tag} received mcq={num_mcq} open={num_open}")
     db = SessionLocal()
     try:
         quiz = db.get(Quiz, uuid.UUID(quiz_id))
@@ -268,10 +279,10 @@ def generate_batch_task(self, quiz_id: str, num_mcq: int = 3, num_open: int = 2)
         quiz = db.get(Quiz, uuid.UUID(quiz_id))
         quiz.status = "in_progress"
         db.commit()
-        logger.success(f"[quiz.batch_task] quiz={quiz_id} ready with {len(ids)} questions")
+        logger.success(f"{tag} DONE questions={len(ids)} in {time.monotonic() - t0:.1f}s")
         return f"ready:{len(ids)}"
     except Exception as e:
-        logger.error(f"[quiz.batch_task] quiz={quiz_id} failed: {e}")
+        logger.opt(exception=True).error(f"{tag} FAILED after {time.monotonic() - t0:.1f}s: {type(e).__name__}: {e}")
         try:
             db2 = SessionLocal()
             try:
@@ -296,7 +307,9 @@ def generate_batch_task(self, quiz_id: str, num_mcq: int = 3, num_open: int = 2)
 
 @celery_app.task(name="quiz.evaluate_submission", bind=True, max_retries=2)
 def evaluate_submission_task(self, quiz_id: str) -> str:
-    logger.info(f"[quiz.submit_task] quiz={quiz_id} entry")
+    t0 = time.monotonic()
+    tag = _tag("quiz.evaluate_submission", quiz_id)
+    logger.info(f"{tag} received")
     db = SessionLocal()
     try:
         quiz = db.get(Quiz, uuid.UUID(quiz_id))
@@ -356,11 +369,11 @@ def evaluate_submission_task(self, quiz_id: str) -> str:
             text=f"Quiz '{quiz.name}' completed",
             event_key=f"quiz:{quiz.id}",
         )
-        logger.success(f"[quiz.submit_task] quiz={quiz_id} completed")
+        logger.success(f"{tag} DONE completed in {time.monotonic() - t0:.1f}s")
         return "completed"
     except Exception as e:
         db.rollback()
-        logger.error(f"[quiz.submit_task] quiz={quiz_id} failed: {e}")
+        logger.opt(exception=True).error(f"{tag} FAILED after {time.monotonic() - t0:.1f}s: {type(e).__name__}: {e}")
         try:
             raise self.retry(exc=e, countdown=15)
         except self.MaxRetriesExceededError:

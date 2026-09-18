@@ -101,6 +101,7 @@ def _friendly_queue_error(e: Exception) -> str:
 
 def _dispatch_process_document(document_id: str) -> str | None:
     """Enqueue background processing. Returns None on success, friendly error str on failure."""
+    short = str(document_id)[:8]
     # Refresh Celery's cached broker so a just-changed REDIS_URL works
     # without a full web restart clearing Kombu's stale connection.
     try:
@@ -108,12 +109,13 @@ def _dispatch_process_document(document_id: str) -> str | None:
 
         refresh_broker_from_env()
     except Exception as e:
-        logger.warning(f"Broker refresh skipped: {e}")
+        logger.warning(f"[WEB dispatch|id={short}] broker refresh skipped: {e}")
     redis_url = _live_redis_url()
     if not redis_url:
         msg = "REDIS_URL is not set on the web service"
-        logger.warning(f"Celery dispatch skipped for document {document_id}: {msg}")
+        logger.warning(f"[WEB dispatch|id={short}] skipped: {msg}")
         return msg
+    logger.info(f"[WEB dispatch|id={short}] dispatching documents.process via {_redis_label(redis_url)}")
     # Fast pre-check so a wrong host gives an actionable error in ~3s
     # instead of Kombu's long reconnect loop ("Retry limit exceeded...").
     try:
@@ -123,16 +125,17 @@ def _dispatch_process_document(document_id: str) -> str | None:
         client.ping()
     except Exception as e:
         friendly = _friendly_queue_error(e)
-        logger.warning(f"Redis ping failed before dispatch of {document_id}: {friendly}")
+        logger.warning(f"[WEB dispatch|id={short}] redis PING failed, leaving queued: {friendly}")
         return friendly
     try:
         # ignore_result=True: status lives in Postgres, so dispatch must not
         # touch the result backend (avoids 'result store backend' failures).
-        process_document_task.apply_async(args=[str(document_id)], ignore_result=True)
+        res = process_document_task.apply_async(args=[str(document_id)], ignore_result=True)
+        logger.info(f"[WEB dispatch|id={short}] enqueued task={getattr(res, 'id', '?')} — watch worker for [JOB documents.process|id={short}] received")
         return None
     except Exception as e:
         friendly = _friendly_queue_error(e)
-        logger.warning(f"Celery dispatch failed for document {document_id}: {friendly}")
+        logger.warning(f"[WEB dispatch|id={short}] enqueue failed: {friendly}")
         return friendly
 
 

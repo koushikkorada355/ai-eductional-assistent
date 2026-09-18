@@ -1,5 +1,6 @@
 """Background learning-context maintenance. All tasks are best-effort:
 they never raise into the tutor response path."""
+import time
 from collections import defaultdict
 from datetime import datetime
 from loguru import logger
@@ -23,6 +24,10 @@ from app.tasks.celery_app import celery_app
 from app.services.ai_usage_service import track_ai_call
 
 
+def _tag(name: str, jid: str) -> str:
+    return f"[JOB {name}|id={str(jid)[:8]}]"
+
+
 def _owner(db, project_id):
     project = db.get(Project, project_id)
     space = db.get(Space, project.space_id) if project else None
@@ -32,6 +37,9 @@ def _owner(db, project_id):
 @celery_app.task(name="learning.summarize_conversation")
 @track_ai_call("summarization")
 def summarize_conversation_task(chat_session_id: str) -> str:
+    t0 = time.monotonic()
+    tag = _tag("learning.summarize", chat_session_id)
+    logger.info(f"{tag} received")
     db = SessionLocal()
     try:
         import uuid as _uuid
@@ -97,10 +105,11 @@ def summarize_conversation_task(chat_session_id: str) -> str:
                 last_message_id=older[-1].id,
             ))
         db.commit()
+        logger.success(f"{tag} DONE summarized in {time.monotonic() - t0:.1f}s")
         return "summarized"
     except Exception as e:
         db.rollback()
-        logger.warning(f"[learning.summarize] failed session={chat_session_id}: {e}")
+        logger.opt(exception=True).warning(f"{tag} FAILED after {time.monotonic() - t0:.1f}s: {type(e).__name__}: {e}")
         return f"failed:{e}"
     finally:
         db.close()
@@ -109,6 +118,9 @@ def summarize_conversation_task(chat_session_id: str) -> str:
 @celery_app.task(name="learning.extract_context")
 @track_ai_call("summarization")
 def extract_learning_context_task(chat_session_id: str, user_message_id: str) -> str:
+    t0 = time.monotonic()
+    tag = _tag("learning.extract", chat_session_id)
+    logger.info(f"{tag} received msg={str(user_message_id)[:8]}")
     db = SessionLocal()
     try:
         import uuid as _uuid
@@ -223,10 +235,11 @@ def extract_learning_context_task(chat_session_id: str, user_message_id: str) ->
                         content=f"Repeated mistakes on {names.get(cid, 'this concept')} ({n} incorrect answers)",
                         confidence=0.85, source="assessment", source_id=None,
                     ))
+        logger.info(f"{tag} DONE result={','.join(results) or 'nothing-useful'} in {time.monotonic() - t0:.1f}s")
         return f"done:{','.join(results) or 'nothing-useful'}"
     except Exception as e:
         db.rollback()
-        logger.warning(f"[learning.extract] failed session={chat_session_id}: {e}")
+        logger.opt(exception=True).warning(f"{tag} FAILED after {time.monotonic() - t0:.1f}s: {type(e).__name__}: {e}")
         return f"failed:{e}"
     finally:
         db.close()

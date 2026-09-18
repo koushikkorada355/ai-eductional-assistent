@@ -1,3 +1,4 @@
+import time
 import uuid
 from datetime import datetime
 from loguru import logger
@@ -13,15 +14,26 @@ from app.services.analytics_service import record_mastery_snapshot
 from app.services.ai_usage_service import track_ai_call
 
 
+def _tag(name: str, jid: str, task=None) -> str:
+    tid = "n/a"
+    try:
+        tid = str(getattr(getattr(task, "request", None), "id", "n/a"))[:8]
+    except Exception:
+        pass
+    return f"[JOB {name}|id={str(jid)[:8]}|task={tid}]"
+
+
 @celery_app.task(name="concepts.extract", bind=True, max_retries=3)
 @track_ai_call("concept_extraction")
 def extract_concepts_task(self, document_id: str) -> str:
-    logger.info(f"[concepts.extract] project lookup for document_id={document_id}")
+    t0 = time.monotonic()
+    tag = _tag("concepts.extract", document_id, self)
+    logger.info(f"{tag} received")
     from app.config import settings as _settings
     if not (_settings.INCEPTION_API_KEY or _settings.GROQ_API_KEY):
         # No LLM configured: the Fake fallback returns non-JSON text, so skip
         # fast instead of burning 3 retries on a guaranteed parse failure.
-        logger.warning(f"[concepts.extract] skipped doc {document_id}: no LLM key configured")
+        logger.warning(f"{tag} skipped: no LLM key on worker (INCEPTION_API_KEY/GROQ_API_KEY both absent)")
         return "skipped:no-llm-key"
     db = SessionLocal()
     try:
@@ -82,11 +94,11 @@ def extract_concepts_task(self, document_id: str) -> str:
             )
             inserted += 1
         db.commit()
-        logger.success(f"[concepts.extract] project_id={project_id} inserted={inserted}")
+        logger.success(f"{tag} DONE project_id={project_id} inserted={inserted} in {time.monotonic() - t0:.1f}s")
         return f"ready:{inserted}"
     except Exception as e:
         db.rollback()
-        logger.error(f"[concepts.extract] failed doc {document_id}: {e}")
+        logger.opt(exception=True).error(f"{tag} FAILED after {time.monotonic() - t0:.1f}s: {type(e).__name__}: {e}")
         try:
             raise self.retry(exc=e, countdown=10)
         except self.MaxRetriesExceededError:
@@ -97,7 +109,9 @@ def extract_concepts_task(self, document_id: str) -> str:
 
 @celery_app.task(name="mastery.update_from_chat")
 def update_mastery_from_chat_task(project_id: str, concept_name: str, confidence_score: float) -> str:
-    logger.info(f"[mastery.chat] project_id={project_id} concept={concept_name} score={confidence_score}")
+    t0 = time.monotonic()
+    tag = _tag("mastery.update_from_chat", project_id)
+    logger.info(f"{tag} received concept={concept_name} score={confidence_score}")
     try:
         clean_name = normalize_concept_name(concept_name)[:200]
     except ValueError as ve:
@@ -151,11 +165,11 @@ def update_mastery_from_chat_task(project_id: str, concept_name: str, confidence
             recompute_project_progress(db, pid)
         except Exception as pe:
             logger.warning(f"[mastery.chat] progress recompute skipped project={project_id}: {pe}")
-        logger.success(f"[mastery.chat] project_id={project_id} concept={concept_name_saved} new={new_mastery}")
+        logger.success(f"{tag} DONE concept={concept_name_saved} new={new_mastery} in {time.monotonic() - t0:.1f}s")
         return f"updated:{new_mastery}"
     except Exception as e:
         db.rollback()
-        logger.error(f"[mastery.chat] failed project {project_id}: {e}")
+        logger.opt(exception=True).error(f"{tag} FAILED after {time.monotonic() - t0:.1f}s: {type(e).__name__}: {e}")
         return f"failed:{e}"
     finally:
         db.close()

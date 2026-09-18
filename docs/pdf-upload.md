@@ -37,7 +37,9 @@ Where to look: Materials list shows `error` under failed/queued docs; open **Vie
 | `Cannot open PDF (corrupt or not a real PDF)...` | Corrupt file. | Re-export, re-upload. |
 | `PDF has no pages.` | 0-page PDF. | Re-export, re-upload. |
 | `No extractable text found...` | Image-only scan with no OCR result. | Provide readable scan / text-layer PDF, **Retry**. |
-| `Embedding failed (check GOOGLE_API_KEY/quota)...` | Gemini key invalid / quota / network. | Fix key/quota, **Retry**. |
+| `Embedding failed (check GOOGLE_API_KEY/quota)...` (names the chunk range) | Gemini key invalid / quota / network, or one giant request. Batches of 32 — only the failing batch is named. | Fix key/quota, **Retry**. |
+| `PDF has N pages (max 300 per upload)...` / `produced N chunks (max 2000)...` | Doc too large for the worker (would OOM-crash it). | Split into smaller PDFs, upload each part. |
+| Worker service itself shows `Crashed`/restarts on upload | Out-of-memory (large scan, 300→200 DPI OCR renders, giant embedding call) or 10-min task limit. | Push latest code (batched embeddings, OCR cap 50 pages, 200 DPI, 300-page/2000-chunk caps, child recycled at ~350MB), redeploy worker with `--concurrency=1`, re-upload smaller parts, **Retry**. If exit was `137`/`OOMKilled`, it was memory — smaller PDFs confirm. |
 | `...background worker is unreachable (queue error: ...)` | Redis down / wrong `REDIS_URL` / worker offline. Upload tried async then inline; both failed. | See Queue errors. File is kept — **Retry** after fix. |
 
 ## Queue errors (stuck `queued`, or `worker is unreachable`)
