@@ -18,7 +18,27 @@ def _redacted_redis_url(url: str | None) -> str:
         return "<unparseable>"
 
 
-_raw_redis = (getattr(settings, "REDIS_URL", None) or "").strip() or None
+def get_live_redis_url() -> str | None:
+    """Live REDIS_URL (env wins so a changed value works even if settings was imported earlier)."""
+    import os
+
+    for candidate in (os.getenv("REDIS_URL"), getattr(settings, "REDIS_URL", None)):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+def _ssl_opts_for(url: str | None) -> dict:
+    # Railway often issues rediss:// (TLS). Without these Celery/redis fail handshake.
+    try:
+        if (url or "").lower().startswith("rediss://"):
+            return {"ssl_cert_reqs": "required"}
+    except Exception:
+        pass
+    return {}
+
+
+_raw_redis = get_live_redis_url()
 if not _raw_redis:
     logger.warning(
         "REDIS_URL is not set — Celery dispatch will fail with 'worker unreachable'. "
@@ -27,6 +47,40 @@ if not _raw_redis:
     )
 else:
     logger.info(f"Celery Redis: {_redacted_redis_url(_raw_redis)}")
+
+
+def refresh_broker_from_env() -> str | None:
+    """Point Celery at the current REDIS_URL and drop stale pooled connections.
+
+    Call before every dispatch/ping so a changed URL takes effect without
+    requiring a full process restart to clear Kombu's cached 'must be
+    restarted' connection. Returns the live URL (or None if unset).
+    """
+    live = get_live_redis_url()
+    try:
+        current = celery_app.conf.broker_url
+    except Exception:
+        current = None
+    if live != current:
+        try:
+            celery_app.conf.broker_url = live
+            celery_app.conf.result_backend = live
+            ssl_opts = _ssl_opts_for(live)
+            celery_app.conf.broker_use_ssl = ssl_opts or None
+            celery_app.conf.redis_backend_use_ssl = ssl_opts or None
+        except Exception as e:
+            logger.warning(f"Could not update Celery broker URL: {e}")
+        # Drop cached connections holding the old host/auth.
+        for attempt in (
+            lambda: celery_app.pool and celery_app.pool.force_close_all(),
+            lambda: celery_app.backend.client and celery_app.backend.client.connection_pool.disconnect(),
+        ):
+            try:
+                attempt()
+            except Exception:
+                pass
+        logger.info(f"Celery broker refreshed: {_redacted_redis_url(live)} (was {_redacted_redis_url(current)})")
+    return live
 
 
 class BaseTask(Task):
@@ -53,6 +107,14 @@ celery_app = Celery(
     task_cls=BaseTask,
     include=["app.tasks.document_tasks", "app.tasks.concept_tasks", "app.tasks.quiz_tasks", "app.tasks.assignment_tasks", "app.tasks.analytics_tasks", "app.tasks.learning_tasks"],
 )
+# TLS for rediss:// URLs (Railway public endpoint). Private redis:// needs none.
+try:
+    _ssl = _ssl_opts_for(_raw_redis)
+    if _ssl:
+        celery_app.conf.broker_use_ssl = _ssl
+        celery_app.conf.redis_backend_use_ssl = _ssl
+except Exception:
+    pass
 
 celery_app.conf.update(
     task_track_started=True,

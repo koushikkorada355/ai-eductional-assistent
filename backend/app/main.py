@@ -93,9 +93,10 @@ async def lifespan(app: FastAPI):
             # Redis reachability at boot (warning only — uploads stay usable
             # and report the reason instead of 500ing when Redis is down).
             try:
+                import os as _os
                 from urllib.parse import urlsplit as _urlsplit
                 from app.config import settings as _redis_settings
-                _rurl = (getattr(_redis_settings, "REDIS_URL", None) or "").strip()
+                _rurl = (_os.getenv("REDIS_URL") or getattr(_redis_settings, "REDIS_URL", None) or "").strip()
                 if not _rurl:
                     logger.warning("REDIS_URL unset at boot — uploads will queue but dispatch will fail until set + web restarted")
                 else:
@@ -185,16 +186,27 @@ async def queue_health():
     'wrong REDIS_URL' apart from 'Redis down' apart from 'worker offline'.
     Public (no auth) like /health so Railway healthchecks can use it.
     """
+    import os
     from urllib.parse import urlsplit
+
     from app.config import settings as _s
 
-    raw = (getattr(_s, "REDIS_URL", None) or "").strip()
+    raw = (os.getenv("REDIS_URL") or getattr(_s, "REDIS_URL", None) or "").strip()
     if not raw:
         return {
             "status": "unavailable",
             "redis": {"status": "unavailable", "detail": "REDIS_URL is not set on web"},
             "workers": {"status": "unknown", "detail": "skipped without Redis"},
         }
+    # Detect stale Celery config: URL changed in env but web process predates it.
+    try:
+        from app.tasks.celery_app import celery_app as _ca, refresh_broker_from_env as _refresh
+
+        _refresh()
+        _conf = (_ca.conf.broker_url or "").strip() if getattr(_ca.conf, "broker_url", None) else ""
+        _stale = bool(_conf and _conf != raw)
+    except Exception:
+        _conf, _stale = "", False
     try:
         _p = urlsplit(raw)
         host_label = f"{_p.scheme or '?'}://{_p.hostname or '?'}:{_p.port or '?'}"
@@ -226,4 +238,10 @@ async def queue_health():
     except Exception as e:
         workers = {"status": "degraded", "detail": f"{type(e).__name__}: {e}"}
         status = "degraded"
-    return {"status": status, "redis": redis_status, "workers": workers}
+    out: dict = {"status": status, "redis": redis_status, "workers": workers}
+    if _stale:
+        out["hint"] = (
+            "Web was started with a different REDIS_URL than currently configured "
+            f"(running={_conf[:40]}...). Restart WEB so all dispatches use the new value, then Retry."
+        )
+    return out

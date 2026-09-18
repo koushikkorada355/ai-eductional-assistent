@@ -41,12 +41,24 @@ def _max_upload_bytes() -> int:
     return max(1, mb) * 1024 * 1024
 
 
-def _redis_label() -> str:
+def _live_redis_url() -> str | None:
+    """Live URL: env wins so a just-changed Railway value is used immediately."""
+    import os
+
+    for candidate in (os.getenv("REDIS_URL"), getattr(settings, "REDIS_URL", None)):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+def _redis_label(url: str | None = None) -> str:
     """Redacted Redis host for error messages (no password leak)."""
     try:
         from urllib.parse import urlsplit
 
-        url = (getattr(settings, "REDIS_URL", None) or "").strip()
+        if url is None:
+            url = _live_redis_url() or ""
+        url = (url or "").strip()
         if not url:
             return "<REDIS_URL unset>"
         parts = urlsplit(url)
@@ -89,7 +101,15 @@ def _friendly_queue_error(e: Exception) -> str:
 
 def _dispatch_process_document(document_id: str) -> str | None:
     """Enqueue background processing. Returns None on success, friendly error str on failure."""
-    redis_url = (getattr(settings, "REDIS_URL", None) or "").strip()
+    # Refresh Celery's cached broker so a just-changed REDIS_URL works
+    # without a full web restart clearing Kombu's stale connection.
+    try:
+        from app.tasks.celery_app import refresh_broker_from_env
+
+        refresh_broker_from_env()
+    except Exception as e:
+        logger.warning(f"Broker refresh skipped: {e}")
+    redis_url = _live_redis_url()
     if not redis_url:
         msg = "REDIS_URL is not set on the web service"
         logger.warning(f"Celery dispatch skipped for document {document_id}: {msg}")
@@ -114,6 +134,74 @@ def _dispatch_process_document(document_id: str) -> str | None:
         friendly = _friendly_queue_error(e)
         logger.warning(f"Celery dispatch failed for document {document_id}: {friendly}")
         return friendly
+
+
+def _process_inline(document_id: str) -> str:
+    """Run the RAG pipeline synchronously in the web process.
+
+    Used as a fallback when Redis/worker is unreachable, and avoids the
+    shared-volume problem entirely (web just wrote the file locally).
+    Returns the task's result string (ready:... / failed:...).
+    """
+    try:
+        return process_document_task.run(str(document_id))
+    except Exception as e:
+        logger.warning(f"Inline processing failed for {document_id}: {e}")
+        return f"failed:{e}"
+
+
+def _dispatch_or_process_inline(db: Session, doc: Document) -> None:
+    """Prefer async Celery; fall back to inline so docs never stay queued forever.
+
+    On async success: doc stays queued and worker will mark ready/failed.
+    On async failure: run inline on web (file is local here). The task itself
+    sets doc.status/error, so just refresh the row afterwards.
+    """
+    dispatch_err = _dispatch_process_document(str(doc.id))
+    if not dispatch_err:
+        return
+    logger.warning(f"Async dispatch failed for {doc.id}, trying inline: {dispatch_err}")
+    try:
+        result = _process_inline(str(doc.id))
+    except Exception as e:
+        result = f"failed:{e}"
+    try:
+        db.expire_all()
+        refreshed = db.query(Document).filter(Document.id == doc.id).first()
+        if refreshed is not None:
+            doc.status = refreshed.status
+            if hasattr(doc, "error"):
+                doc.error = getattr(refreshed, "error", None)
+            doc.file_name = refreshed.file_name
+            doc.file_path = refreshed.file_path
+    except Exception as e:
+        logger.warning(f"Could not refresh {doc.id} after inline run: {e}")
+    # If inline also left it queued/failed-with-queue-error, explain both.
+    current_err = getattr(doc, "error", None)
+    if getattr(doc, "status", None) == "queued" or (
+        getattr(doc, "status", None) == "failed" and current_err and "worker is unreachable" in current_err
+    ):
+        if hasattr(doc, "error"):
+            doc.error = (
+                "Upload saved but background worker is unreachable "
+                f"(queue error: {dispatch_err}; inline result: {result[:200]}). "
+                "Fix Redis (same REDIS_URL on web+worker, restart web) then Retry. "
+                f"Details: GET /health/queue."
+            )
+            try:
+                db.commit()
+                db.refresh(doc)
+            except Exception:
+                db.rollback()
+    else:
+        # Inline completed (ready or honest failed like no-text/API key) —
+        # task already set a specific error; just persist the refreshed state.
+        try:
+            db.commit()
+            db.refresh(doc)
+        except Exception:
+            db.rollback()
+    logger.info(f"Inline fallback for {doc.id}: {result[:200]} -> status={getattr(doc, 'status', '?')}")
 
 
 def _with_stats(db: Session, doc: Document) -> Document:
@@ -183,18 +271,7 @@ def retry_document(
         doc.error = None
     db.commit()
     db.refresh(doc)
-    dispatch_err = _dispatch_process_document(str(doc.id))
-    if dispatch_err:
-        # Queue unreachable: keep doc queued so a later retry can succeed,
-        # but record why so the UI can explain instead of failing silently.
-        if hasattr(doc, "error"):
-            doc.error = (
-                "Upload saved but background worker is unreachable "
-                f"(queue error: {dispatch_err}). The file is kept — press Retry once the worker/Redis is up."
-            )
-            db.commit()
-            db.refresh(doc)
-        logger.warning(f"Retry queued without worker dispatch for {doc.id}: {dispatch_err}")
+    _dispatch_or_process_inline(db, doc)
     return _with_stats(db, doc)
 
 
@@ -351,19 +428,11 @@ async def upload_pdf(
                text=f"Uploaded '{document.file_name}'",
                event_key=f"document:{document.id}:uploaded")
 
-    # RAG pipeline: parse PDF -> chunk -> Gemini embeddings -> pgvector,
-    # executed async via Celery so uploads never block.
-    dispatch_err = _dispatch_process_document(str(document.id))
-    if dispatch_err and hasattr(document, "error"):
-        # Don't fail the upload when Redis/worker is down: the file is safely
-        # stored and Retry can dispatch later. Record why for the UI.
-        document.error = (
-            "Upload saved but background worker is unreachable "
-            f"(queue error: {dispatch_err}). Press Retry once the worker/Redis is up."
-        )
-        db.commit()
-        db.refresh(document)
-        logger.warning(f"Upload {document.id} saved without dispatch: {dispatch_err}")
+    # RAG pipeline: parse PDF -> chunk -> Gemini embeddings -> pgvector.
+    # Prefer async Celery; fall back to inline on web so a dead Redis/worker
+    # can never strand docs in 'queued' (web just wrote the file locally,
+    # so inline also dodges the shared-volume problem).
+    _dispatch_or_process_inline(db, document)
 
     # COLIVARA ALTERNATIVE - COMMENTED OUT (revert by swapping these blocks)
     # Visual RAG indexing via ColiVara (one collection per project).
