@@ -1,4 +1,4 @@
-from pydantic import Field, AliasChoices
+from pydantic import Field, AliasChoices, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import sys
 from loguru import logger
@@ -34,8 +34,17 @@ class Settings(BaseSettings):
     LANGCHAIN_PROJECT: str | None = None
     LANGCHAIN_ENDPOINT: str | None = None
 
-    # Redis
+    # Redis (Celery broker + result backend). Strip stray whitespace/newlines
+    # from copy-pasted Railway values — trailing spaces break connections.
     REDIS_URL: str | None = None
+
+    @field_validator("REDIS_URL", mode="before")
+    @classmethod
+    def _strip_redis(cls, v):
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
 
     # Google
     GOOGLE_API_KEY: str | None = None

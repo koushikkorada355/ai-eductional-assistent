@@ -123,7 +123,7 @@ def process_document_task(document_id: str) -> str:
         try:
             from app.tasks.concept_tasks import extract_concepts_task
 
-            extract_concepts_task.delay(str(document.id))
+            extract_concepts_task.apply_async(args=[str(document.id)], ignore_result=True)
         except Exception as ce:
             logger.warning(f"Concept extraction dispatch failed for {document_id}: {ce}")
         return f"ready:{len(chunks)}"

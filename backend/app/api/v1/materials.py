@@ -41,14 +41,79 @@ def _max_upload_bytes() -> int:
     return max(1, mb) * 1024 * 1024
 
 
-def _dispatch_process_document(document_id: str) -> str | None:
-    """Enqueue background processing. Returns None on success, error str on failure."""
+def _redis_label() -> str:
+    """Redacted Redis host for error messages (no password leak)."""
     try:
-        process_document_task.delay(str(document_id))
+        from urllib.parse import urlsplit
+
+        url = (getattr(settings, "REDIS_URL", None) or "").strip()
+        if not url:
+            return "<REDIS_URL unset>"
+        parts = urlsplit(url)
+        host = parts.hostname or "?"
+        port = f":{parts.port}" if parts.port else ""
+        return f"{parts.scheme or '?'}://{host}{port}"
+    except Exception:
+        return "<unparseable REDIS_URL>"
+
+
+def _friendly_queue_error(e: Exception) -> str:
+    raw = str(e).strip() or type(e).__name__
+    redis = _redis_label()
+    low = raw.lower()
+    if "redis_url" in low and "not set" in low or redis == "<REDIS_URL unset>":
+        return (
+            "REDIS_URL is not set on the web service. Set it (same value as worker) and restart web, then Retry."
+        )
+    if "result store backend" in low or "must be restarted" in low:
+        return (
+            f"Cannot reach Redis result store at {redis} ({raw[:160]}). "
+            "Check: 1) Railway Redis service is Running, 2) web + worker share the SAME internal REDIS_URL "
+            "(not redis://redis:6379/0 in prod), 3) restart WEB after changing env (Celery caches it), then Retry."
+        )
+    if "name or service not known" in low or "temporary failure in name resolution" in low or "nodename nor servname" in low:
+        return (
+            f"Redis host does not resolve ({redis}): {raw[:160]}. "
+            "On Railway use the Redis service internal URL on BOTH web and worker (local 'redis' hostname only works in docker-compose), then restart web and Retry."
+        )
+    if "auth" in low or "password" in low or "noauth" in low:
+        return (
+            f"Redis auth failed at {redis}: {raw[:160]}. Copy the full internal REDIS_URL (with password) from the Redis service into BOTH web and worker, restart web, then Retry."
+        )
+    if "refused" in low or "timed out" in low or "timeout" in low:
+        return (
+            f"Redis unreachable at {redis}: {raw[:160]}. Check the Redis service is Running (not sleeping/crashed), then restart web and Retry."
+        )
+    return f"Queue error at {redis}: {raw[:200]}. Check Redis is Running, web+worker share the same REDIS_URL, restart web, then Retry."
+
+
+def _dispatch_process_document(document_id: str) -> str | None:
+    """Enqueue background processing. Returns None on success, friendly error str on failure."""
+    redis_url = (getattr(settings, "REDIS_URL", None) or "").strip()
+    if not redis_url:
+        msg = "REDIS_URL is not set on the web service"
+        logger.warning(f"Celery dispatch skipped for document {document_id}: {msg}")
+        return msg
+    # Fast pre-check so a wrong host gives an actionable error in ~3s
+    # instead of Kombu's long reconnect loop ("Retry limit exceeded...").
+    try:
+        import redis as redis_lib
+
+        client = redis_lib.from_url(redis_url, socket_timeout=3, socket_connect_timeout=3)
+        client.ping()
+    except Exception as e:
+        friendly = _friendly_queue_error(e)
+        logger.warning(f"Redis ping failed before dispatch of {document_id}: {friendly}")
+        return friendly
+    try:
+        # ignore_result=True: status lives in Postgres, so dispatch must not
+        # touch the result backend (avoids 'result store backend' failures).
+        process_document_task.apply_async(args=[str(document_id)], ignore_result=True)
         return None
     except Exception as e:
-        logger.warning(f"Celery dispatch failed for document {document_id}: {e}")
-        return str(e)
+        friendly = _friendly_queue_error(e)
+        logger.warning(f"Celery dispatch failed for document {document_id}: {friendly}")
+        return friendly
 
 
 def _with_stats(db: Session, doc: Document) -> Document:

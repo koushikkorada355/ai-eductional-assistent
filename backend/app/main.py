@@ -90,6 +90,22 @@ async def lifespan(app: FastAPI):
                 logger.info(f"Upload dir ready: {_upload_dir} (set UPLOAD_DIR to share web+worker storage)")
             except Exception as e:
                 logger.warning(f"Upload dir init skipped: {e}")
+            # Redis reachability at boot (warning only — uploads stay usable
+            # and report the reason instead of 500ing when Redis is down).
+            try:
+                from urllib.parse import urlsplit as _urlsplit
+                from app.config import settings as _redis_settings
+                _rurl = (getattr(_redis_settings, "REDIS_URL", None) or "").strip()
+                if not _rurl:
+                    logger.warning("REDIS_URL unset at boot — uploads will queue but dispatch will fail until set + web restarted")
+                else:
+                    _p = _urlsplit(_rurl)
+                    logger.info(f"Redis configured: {_p.scheme or '?'}://{_p.hostname or '?'}:{_p.port or '?'} — pinging...")
+                    import redis as _redis_lib
+                    _redis_lib.from_url(_rurl, socket_timeout=3, socket_connect_timeout=3).ping()
+                    logger.success("Redis PING ok")
+            except Exception as e:
+                logger.warning(f"Redis unreachable at boot ({type(e).__name__}: {e}) — uploads will stay queued until fixed + web restarted")
             logger.success("Database connected and tables created.")
             break
         except OperationalError as e:
@@ -159,3 +175,55 @@ app.include_router(admin_router, prefix="/api/v1", tags=["Admin"])
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/health/queue")
+async def queue_health():
+    """Diagnose uploads-stuck-in-queued without uploading a file.
+
+    Returns redis ping + worker ping + redacted host so the UI/logs can tell
+    'wrong REDIS_URL' apart from 'Redis down' apart from 'worker offline'.
+    Public (no auth) like /health so Railway healthchecks can use it.
+    """
+    from urllib.parse import urlsplit
+    from app.config import settings as _s
+
+    raw = (getattr(_s, "REDIS_URL", None) or "").strip()
+    if not raw:
+        return {
+            "status": "unavailable",
+            "redis": {"status": "unavailable", "detail": "REDIS_URL is not set on web"},
+            "workers": {"status": "unknown", "detail": "skipped without Redis"},
+        }
+    try:
+        _p = urlsplit(raw)
+        host_label = f"{_p.scheme or '?'}://{_p.hostname or '?'}:{_p.port or '?'}"
+    except Exception:
+        host_label = "<unparseable>"
+    try:
+        import redis as redis_lib
+
+        redis_lib.from_url(raw, socket_timeout=3, socket_connect_timeout=3).ping()
+        redis_status: dict = {"status": "healthy", "detail": f"PING ok ({host_label})"}
+    except Exception as e:
+        return {
+            "status": "unavailable",
+            "redis": {"status": "unavailable", "detail": f"{type(e).__name__}: {e} ({host_label})"},
+            "workers": {"status": "unknown", "detail": "skipped, Redis unreachable"},
+            "hint": "Copy the Redis service internal URL into BOTH web and worker env, then restart WEB (Celery caches it).",
+        }
+    try:
+        from app.tasks.celery_app import celery_app
+
+        ping = celery_app.control.ping(timeout=2)
+        if ping:
+            names = sorted({k for node in ping for k in node})
+            workers: dict = {"status": "healthy", "detail": f"{len(ping)} worker(s): {', '.join(names)}"}
+            status = "healthy"
+        else:
+            workers = {"status": "degraded", "detail": "Redis ok but no workers replied — is the worker service Running on the same REDIS_URL?"}
+            status = "degraded"
+    except Exception as e:
+        workers = {"status": "degraded", "detail": f"{type(e).__name__}: {e}"}
+        status = "degraded"
+    return {"status": status, "redis": redis_status, "workers": workers}
