@@ -107,9 +107,20 @@ app = FastAPI(title="AI Study Companion Backend", lifespan=lifespan)
 
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import settings as _cors_settings
+
+_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+if _cors_settings.FRONTEND_URL:
+    # Support single URL or comma-separated list.
+    _cors_origins += [
+        u.strip().rstrip("/")
+        for u in _cors_settings.FRONTEND_URL.split(",")
+        if u.strip()
+    ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors_origins,
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],

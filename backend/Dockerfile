@@ -9,5 +9,6 @@ COPY . .
 
 EXPOSE 8000
 
-# Tell Uvicorn to look inside the 'app' folder for 'main.py'
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Prod start: honor Railway's $PORT, no --reload (dev only).
+# Local docker-compose still works ($PORT unset → 8000).
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
