@@ -1,6 +1,11 @@
 # Secrets - never commit (contains API keys)
+# Matches .env in any folder (root, backend/, frontend/)
 .env
-*.env
+# Matches .env.local, .env.development, .env.test, etc. in any folder
+.env.*
+# Important: templates and non-secret prod URL must stay tracked
+!.env.example
+!frontend/.env.production
 
 # Python
 __pycache__/
@@ -10,9 +15,11 @@ __pycache__/
 venv/
 .env/
 
-# Uploaded PDFs and local data
+# Uploaded PDFs and local data (generated at runtime, not source)
 uploads/
-*.pdf
+backend/uploads/
+# Project requirements PDF - not required in repo
+Project_Requirements.pdf
 
 # Postgres local data (if ever bind-mounted)
 postgres_data/
@@ -27,22 +34,35 @@ redis_data/
 # Local databases / coverage
 *.sqlite3
 *.sqlite
+*.sqlite3-journal
 htmlcov/
 .coverage
 
 # Local git backup - never commit
 .git-corrupted/
 
-# Unimportant / generated - never commit
+# Unused / generated - never commit
+# figmadesign/ is an unimportant Figma Make prototype (mock UI, not wired
+# to backend) - ignore entirely.
 figmadesign/
 frontend/dist/
 frontend/node_modules/
+.figma/
 node_modules/
 dist/
+dist-ssr/
 build/
 coverage/
 *.log
+logs/
 *.tsbuildinfo
 .vite/
+.cache/
 .pytest_cache/
 .mypy_cache/
+.vercel/
+vite.config.*.timestamp-*
+.claude-replay.*
+.tmp-*
+.plugins/
+.opencode-skills/

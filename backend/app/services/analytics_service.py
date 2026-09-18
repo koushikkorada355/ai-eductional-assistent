@@ -6,6 +6,7 @@ plain data out) so they are unit-testable without a database.
 """
 from datetime import datetime
 
+from loguru import logger
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models.mastery import MasteryHistory
@@ -132,7 +133,7 @@ def insight_text(name, growth, trend):
 
 
 def record_mastery_snapshot(db, *, user_id, project_id, concept_id, new_mastery,
-                             source, source_id=None, previous_mastery=None, baseline_at=None):
+                              source, source_id=None, previous_mastery=None, baseline_at=None):
     """Append a MasteryHistory row after a real mastery update.
 
     On the first snapshot for a concept, a baseline row (the pre-update
@@ -169,3 +170,30 @@ def record_mastery_snapshot(db, *, user_id, project_id, concept_id, new_mastery,
     except Exception:
         db.rollback()
         return "skipped:error"
+
+
+def recompute_project_progress(db, project_id) -> float | None:
+    """Refresh Project.overall_progress from live concept mastery.
+
+    Progress = average Concept.mastery_level across the project (0.0 when the
+    project has no concepts yet). Called best-effort after every mastery write
+    (quiz submit, tutor chat signal) so dashboards and rollups never show a
+    stale write-once value. Never raises — a progress failure must not break
+    the mastery update it follows.
+    """
+    try:
+        from app.db.models.assessment import Concept
+        from app.db.models.project import Project
+
+        project = db.get(Project, project_id)
+        if project is None:
+            return None
+        concepts = db.query(Concept).filter(Concept.project_id == project_id).all()
+        avg = round(sum(c.mastery_level or 0 for c in concepts) / len(concepts), 1) if concepts else 0.0
+        project.overall_progress = avg
+        db.commit()
+        return avg
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"[analytics.progress] recompute skipped project={project_id}: {e}")
+        return None

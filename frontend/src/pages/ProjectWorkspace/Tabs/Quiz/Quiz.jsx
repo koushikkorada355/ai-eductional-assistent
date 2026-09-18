@@ -6,7 +6,7 @@ import {
   loadAttempts, viewAttempt, resumeAttempt, setIndex, setDraft, backToStart, resetQuiz,
 } from '../../../../features/quiz/quizSlice.js';
 import ConfirmModal from '../../../../components/ConfirmModal/ConfirmModal.jsx';
-import { PageHeader, Stat, StatusBadge, Spinner, ProgressBar } from '../../../../components/ui/ui.jsx';
+import { PageHeader, Stat, StatusBadge, Spinner, ProgressBar, Pagination } from '../../../../components/ui/ui.jsx';
 import { IconClipboard, IconArrowRight, IconArrowLeft, IconCheck } from '../../../../components/icons/Icons.jsx';
 
 function trackerClass(q, i, index) {
@@ -58,7 +58,7 @@ export default function Quiz({ spaceId, projectId }) {
   const dispatch = useDispatch();
   const {
     view, quizId, name, questions, index, drafts,
-    attempts, average, status, error,
+    attempts, attemptsMeta, attemptsSummary, average, status, error,
   } = useSelector((s) => s.quiz);
   const [formName, setFormName] = useState('');
   const [formGoal, setFormGoal] = useState('');
@@ -67,7 +67,8 @@ export default function Quiz({ spaceId, projectId }) {
   const [nameTouched, setNameTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmSubmit, setConfirmSubmit] = useState(false);
-  const [showAllHistory, setShowAllHistory] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
+  const HISTORY_SIZE = 5;
 
   const nameValid = formName.trim().length > 0;
   const totalQuestions = formMcq + formOpen;
@@ -75,7 +76,8 @@ export default function Quiz({ spaceId, projectId }) {
 
   useEffect(() => {
     dispatch(resetQuiz());
-    if (projectId) dispatch(loadAttempts({ projectId }));
+    setHistoryPage(1);
+    if (projectId) dispatch(loadAttempts({ projectId, page: 1, pageSize: HISTORY_SIZE }));
   }, [dispatch, projectId]);
 
   useEffect(() => {
@@ -129,15 +131,23 @@ export default function Quiz({ spaceId, projectId }) {
 
   const goStart = () => {
     dispatch(backToStart());
-    if (projectId) dispatch(loadAttempts({ projectId }));
+    setHistoryPage(1);
+    if (projectId) dispatch(loadAttempts({ projectId, page: 1, pageSize: HISTORY_SIZE }));
+  };
+
+  const gotoHistoryPage = (p) => {
+    setHistoryPage(p);
+    if (projectId) dispatch(loadAttempts({ projectId, page: p, pageSize: HISTORY_SIZE }));
   };
 
   /* ---------------- start: understand → configure → history ---------------- */
   if (view === 'start') {
-    const completed = attempts.filter((a) => a.status === 'completed');
-    const scores = completed.map((a) => a.average_score).filter((s) => s != null);
-    const best = scores.length ? Math.max(...scores) : null;
-    const active = attempts.filter((a) => a.status === 'in_progress' || a.status === 'generating' || a.status === 'evaluating');
+    // Exact totals come from the server summary so the cards stay correct
+    // at any scale; per-row scores describe the loaded page.
+    const total = attemptsSummary?.total ?? attemptsMeta.total ?? attempts.length;
+    const completedCount = attemptsSummary?.completed ?? attempts.filter((a) => a.status === 'completed').length;
+    const activeCount = attemptsSummary?.active ?? attempts.filter((a) => a.status === 'in_progress' || a.status === 'generating' || a.status === 'evaluating').length;
+    const completion = total ? Math.round((completedCount / total) * 100) : null;
     return (
       <div className="flex flex-col gap-6">
         <PageHeader
@@ -145,12 +155,12 @@ export default function Quiz({ spaceId, projectId }) {
           title="Quizzes"
           sub="Test yourself with questions generated from your uploaded materials."
         />
-        {(attempts.length > 0) && (
+        {(attempts.length > 0 || total > 0) && (
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <Stat value={attempts.length} label="Attempts" tone="accent" />
-            <Stat value={completed.length} label="Completed" tone="up" />
-            <Stat value={best != null ? `${best}%` : '—'} label="Best score" tone={best != null && best >= 60 ? 'up' : undefined} />
-            <Stat value={active.length} label="In progress" tone={active.length ? 'accent' : undefined} />
+            <Stat value={total} label="Attempts" tone="accent" />
+            <Stat value={completedCount} label="Completed" tone="up" />
+            <Stat value={completion != null ? `${completion}%` : '—'} label="Completion" tone={completion != null && completion >= 60 ? 'up' : undefined} />
+            <Stat value={activeCount} label="In progress" tone={activeCount ? 'accent' : undefined} />
           </div>
         )}
         <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-5">
@@ -225,7 +235,7 @@ export default function Quiz({ spaceId, projectId }) {
               {attempts.length === 0 && (
                 <p className="text-[13px] text-muted">No attempts yet. Your quizzes will appear here.</p>
               )}
-              {(showAllHistory ? attempts : attempts.slice(0, 5)).map((a) => {
+              {attempts.map((a) => {
                 const disabled = a.status === 'failed' || status === 'loading';
                 const score = a.average_score;
                 return (
@@ -249,16 +259,7 @@ export default function Quiz({ spaceId, projectId }) {
                   </motion.button>
                 );
               })}
-              {attempts.length > 5 && (
-                <button
-                  type="button"
-                  onClick={() => setShowAllHistory((v) => !v)}
-                  aria-expanded={showAllHistory}
-                  className="mt-1 inline-flex min-h-9 items-center justify-center rounded-md border border-line bg-surface px-4 text-sm font-medium text-ink hover:border-primary hover:text-primary"
-                >
-                  {showAllHistory ? 'Show less' : `View all ${attempts.length} quizzes →`}
-                </button>
-              )}
+              <Pagination page={attemptsMeta.page} pages={attemptsMeta.pages} total={attemptsMeta.total} onPage={gotoHistoryPage} />
             </div>
           </div>
         </div>

@@ -1,7 +1,5 @@
 # prompt.md — User Prompts Log
 
-> Every message you type is appended here as requested.
-
 ## 2026-09-15 — hii
 ```
 hii

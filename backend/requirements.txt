@@ -21,6 +21,8 @@ email-validator
 celery
 redis
 PyMuPDF
+pytesseract
+Pillow
 langchain-openai
 langchain-google-genai
 langchain-text-splitters

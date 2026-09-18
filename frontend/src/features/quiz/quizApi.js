@@ -8,7 +8,7 @@ export const submitQuiz = (quizId) =>
   api.post(`/quiz/${quizId}/submit`).then((r) => r.data);
 export const fetchMastery = (spaceId, projectId) =>
   api.get(`/spaces/${spaceId}/projects/${projectId}/mastery`).then((r) => r.data);
-export const fetchAttempts = (projectId) =>
-  api.get(`/projects/${projectId}/quizzes`).then((r) => r.data);
+export const fetchAttempts = (projectId, params) =>
+  api.get(`/projects/${projectId}/quizzes`, { params: params || {} }).then((r) => r.data);
 export const fetchQuizDetail = (quizId) =>
   api.get(`/quiz/${quizId}`).then((r) => r.data);

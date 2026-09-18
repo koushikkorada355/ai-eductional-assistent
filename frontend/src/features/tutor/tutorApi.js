@@ -37,8 +37,8 @@ export function describeApiError(e, action) {
   return detailText || `Couldn't complete that. Please try again.`;
 }
 
-export const listConversations = (spaceId, projectId) =>
-  api.get(`${base(spaceId, projectId)}/conversations`).then((r) => r.data);
+export const listConversations = (spaceId, projectId, params) =>
+  api.get(`${base(spaceId, projectId)}/conversations`, { params: params || {} }).then((r) => r.data);
 
 export const createConversation = (spaceId, projectId, title) =>
   api.post(`${base(spaceId, projectId)}/conversations`, title ? { title } : {}).then((r) => r.data);

@@ -26,6 +26,8 @@ const iconBtn =
 
 export default function ConversationSidebar({
   conversations,
+  conversationsMeta,
+  onPage,
   activeId,
   creating,
   createError,
@@ -195,6 +197,27 @@ export default function ConversationSidebar({
               })}
             </div>
           ))}
+          {(conversationsMeta?.pages || 0) > 1 && (
+            <div className="flex items-center justify-between gap-1 px-2 py-1 text-[11px] text-muted">
+              <span>Page {conversationsMeta.page} of {conversationsMeta.pages}</span>
+              <span className="flex items-center gap-1">
+                <button
+                  type="button"
+                  disabled={(conversationsMeta.page || 1) <= 1}
+                  onClick={() => onPage && onPage(conversationsMeta.page - 1)}
+                  className={iconBtn}
+                  aria-label="Previous conversations page"
+                >←</button>
+                <button
+                  type="button"
+                  disabled={(conversationsMeta.page || 1) >= conversationsMeta.pages}
+                  onClick={() => onPage && onPage(conversationsMeta.page + 1)}
+                  className={iconBtn}
+                  aria-label="Next conversations page"
+                >→</button>
+              </span>
+            </div>
+          )}
         </div>
       </nav>
     </>

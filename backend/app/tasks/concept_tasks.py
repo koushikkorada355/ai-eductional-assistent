@@ -144,6 +144,13 @@ def update_mastery_from_chat_task(project_id: str, concept_name: str, confidence
             )
         except Exception as he:
             logger.warning(f"[mastery.chat] history skipped project={project_id}: {he}")
+        # Keep Project.overall_progress live (best-effort; never breaks mastery).
+        try:
+            from app.services.analytics_service import recompute_project_progress
+
+            recompute_project_progress(db, pid)
+        except Exception as pe:
+            logger.warning(f"[mastery.chat] progress recompute skipped project={project_id}: {pe}")
         logger.success(f"[mastery.chat] project_id={project_id} concept={concept_name_saved} new={new_mastery}")
         return f"updated:{new_mastery}"
     except Exception as e:

@@ -46,6 +46,9 @@ services:
 
     volumes:
       - ./backend:/code
+      # Shared upload storage: mimics prod where web + worker must mount
+      # the SAME volume (Railway: /data/uploads on both + UPLOAD_DIR set).
+      - uploads_data:/code/uploads
 
     env_file:
       - .env
@@ -98,6 +101,8 @@ services:
 
     volumes:
       - ./backend:/code
+      # Must match backend: worker reads uploads from the same shared dir.
+      - uploads_data:/code/uploads
 
     env_file:
       - .env
@@ -150,3 +155,5 @@ volumes:
 
   # Redis still runs locally in Docker.
   redis_data:
+  # Shared PDF uploads between backend (writer) and worker (reader).
+  uploads_data:

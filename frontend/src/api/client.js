@@ -7,7 +7,9 @@ const getBaseURL = () => {
   // http://<vercel-host>:8000.
   const envUrl = import.meta.env.VITE_API_BASE_URL;
   if (envUrl) {
-    return envUrl;
+    // Strip trailing slashes: ".../api/v1/" + "/auth/login" would
+    // otherwise produce a double slash and a 404.
+    return envUrl.replace(/\/+$/, '');
   }
   // Local dev fallback: when accessed via LAN IP (e.g. friend opens
   // http://10.0.4.205:5173), call the backend on that same host.

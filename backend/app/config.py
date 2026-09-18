@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     # Local dev keeps working without it (localhost + LAN regex in main.py).
     FRONTEND_URL: str | None = None
 
+    # Upload storage: absolute dir shared by web + worker.
+    # Local dev defaults to ./uploads. Production (Railway) must mount the
+    # SAME volume into web and worker at /data/uploads and set
+    # UPLOAD_DIR=/data/uploads on both services.
+    UPLOAD_DIR: str | None = None
+    # Reject oversized PDFs early so one huge upload can't OOM the worker.
+    MAX_UPLOAD_MB: int = 25
+
     # Pydantic settings
     model_config = SettingsConfigDict(
         env_file=".env",

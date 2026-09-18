@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { createQuiz, saveAnswer, submitQuiz, fetchAttempts, fetchQuizDetail } from './quizApi.js';
+import { pageItems, pageMeta } from '../../utils/paging.js';
 
 export const startQuiz = createAsyncThunk('quiz/start', async ({ projectId, name, goal, numMcq, numOpen }, { rejectWithValue }) => {
   try { return await createQuiz(projectId, { name, goal: goal || '', num_mcq: numMcq ?? 3, num_open: numOpen ?? 2 }); } catch (e) { return rejectWithValue(e.response?.data?.detail || 'Failed to create quiz'); }
@@ -16,8 +17,8 @@ export const persistAnswer = createAsyncThunk(
 export const submitFullQuiz = createAsyncThunk('quiz/submit', async ({ quizId }, { rejectWithValue }) => {
   try { return await submitQuiz(quizId); } catch (e) { return rejectWithValue(e.response?.data?.detail || 'Failed to submit quiz'); }
 });
-export const loadAttempts = createAsyncThunk('quiz/attempts', async ({ projectId }, { rejectWithValue }) => {
-  try { return await fetchAttempts(projectId); } catch (e) { return rejectWithValue('Failed to load attempts'); }
+export const loadAttempts = createAsyncThunk('quiz/attempts', async ({ projectId, page, pageSize }, { rejectWithValue }) => {
+  try { return await fetchAttempts(projectId, { page: page || 1, page_size: pageSize || 10 }); } catch (e) { return rejectWithValue('Failed to load attempts'); }
 });
 export const loadQuizDetail = createAsyncThunk('quiz/detail', async ({ quizId }, { rejectWithValue }) => {
   try { return await fetchQuizDetail(quizId); } catch (e) { return rejectWithValue('Failed to load quiz details'); }
@@ -40,6 +41,8 @@ const slice = createSlice({
     index: 0,
     drafts: {},
     attempts: [],
+    attemptsMeta: { total: 0, page: 1, pageSize: 10, pages: 0 },
+    attemptsSummary: null,
     detail: null,
     average: null,
     status: 'idle',
@@ -115,7 +118,7 @@ const slice = createSlice({
       .addCase(persistAnswer.rejected, (s, a) => { s.error = a.payload; })
       .addCase(submitFullQuiz.fulfilled, (s) => { s.view = 'evaluating'; s.status = 'evaluating'; })
       .addCase(submitFullQuiz.rejected, (s, a) => { s.error = a.payload; })
-      .addCase(loadAttempts.fulfilled, (s, a) => { s.attempts = a.payload; })
+      .addCase(loadAttempts.fulfilled, (s, a) => { s.attempts = pageItems(a.payload); s.attemptsMeta = pageMeta(a.payload); s.attemptsSummary = a.payload?.summary || null; })
       .addCase(loadQuizDetail.fulfilled, (s, a) => { s.detail = a.payload; })
       .addCase(viewAttempt.fulfilled, (s, a) => {
         s.questions = a.payload.questions;

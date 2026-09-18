@@ -1,5 +1,5 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from typing import List, Optional, Any, Literal
@@ -14,7 +14,9 @@ from app.schemas.chat import (
     MessageOut, ChatSessionOut, ConversationCreate, ConversationUpdate,
     ConversationOut,
 )
+from app.utils.pagination import MAX_PAGE_SIZE, PageOut, paginate_query, page_envelope
 from app.ai.graphs.tutor_graph import tutor_app
+from app.db.checkpointer import robust_ainvoke
 from app.ai.actions import get_action_hint, parse_flashcards, parse_practice_mcq, CREATE_FLASHCARDS, PRACTICE
 from app.services.ai_usage_service import track_ai_call
 from loguru import logger
@@ -229,7 +231,9 @@ async def _run_tutor_turn(
     db.refresh(user_msg)
 
     config = {"configurable": {"thread_id": str(chat_session.id)}}
-    result = await tutor_app.ainvoke(
+    # robust_ainvoke: survives Neon's idle-SSL kills (reset pool + retry once).
+    result = await robust_ainvoke(
+        tutor_app,
         {"user_question": question, "project_id": str(project.id),
          "user_id": str(current_user.id), "user_name": "",
          "chat_session_id": str(chat_session.id),
@@ -271,18 +275,20 @@ async def _run_tutor_turn(
 # Multi-conversation endpoints (canonical)
 # ---------------------------------------------------------------------------
 
-@router.get("/{project_id}/conversations", response_model=List[ConversationOut])
+@router.get("/{project_id}/conversations", response_model=PageOut)
 def list_conversations(
     project: Project = Depends(get_owned_project),
     db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
 ):
-    sessions = (
+    rows, total, page, page_size = paginate_query(
         db.query(ChatSession)
         .filter(ChatSession.project_id == project.id)
-        .order_by(ChatSession.updated_at.desc(), ChatSession.created_at.desc())
-        .all()
+        .order_by(ChatSession.updated_at.desc(), ChatSession.created_at.desc()),
+        page, page_size,
     )
-    return [_conversation_out(s, db) for s in sessions]
+    return page_envelope([_conversation_out(s, db) for s in rows], total, page, page_size)
 
 
 @router.post("/{project_id}/conversations", response_model=ConversationOut, status_code=201)
@@ -329,19 +335,22 @@ def delete_conversation(
     return None
 
 
-@router.get("/{project_id}/conversations/{conversation_id}/messages", response_model=List[MessageOut])
+@router.get("/{project_id}/conversations/{conversation_id}/messages", response_model=PageOut)
 def list_conversation_messages(
     conversation_id: UUID,
     project: Project = Depends(get_owned_project),
     db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=100, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
 ):
     session = _get_owned_conversation(conversation_id, project, db)
-    return (
+    rows, total, page, page_size = paginate_query(
         db.query(Message)
         .filter(Message.chat_session_id == session.id)
-        .order_by(Message.created_at)
-        .all()
+        .order_by(Message.created_at),
+        page, page_size,
     )
+    return page_envelope([MessageOut.model_validate(m) for m in rows], total, page, page_size)
 
 
 @router.post("/{project_id}/conversations/{conversation_id}/tutor", response_model=TutorResponse)

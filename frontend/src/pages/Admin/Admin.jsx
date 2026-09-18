@@ -6,7 +6,7 @@ import {
   loadAdminProjects, loadAdminActivity, loadAdminJobs,
   loadAdminEvaluations, loadAdminUsage, loadAdminHealth,
 } from '../../features/analytics/analyticsSlice.js';
-import { PageHeader, Stat, StatusBadge, EmptyState, ProgressBar } from '../../components/ui/ui.jsx';
+import { PageHeader, Stat, StatusBadge, EmptyState, ProgressBar, Pagination } from '../../components/ui/ui.jsx';
 import './Admin.css';
 
 const TABS = [
@@ -186,19 +186,25 @@ function SystemList({ system }) {
 }
 
 /* ================= USERS ================= */
-function Users({ users, onOpen, detail, onClose }) {
+function Users({ users, usersMeta, onOpen, detail, onClose, onFilter }) {
   const [q, setQ] = useState('');
   const [role, setRole] = useState('all');
-  const filtered = useMemo(() => (users || []).filter((u) => {
-    const needle = q.trim().toLowerCase();
-    const hit = !needle || (u.email || '').toLowerCase().includes(needle) || (u.name || '').toLowerCase().includes(needle);
-    return hit && (role === 'all' || u.role === role);
-  }), [users, q, role]);
+  const page = usersMeta?.page || 1;
+  const pages = usersMeta?.pages || 0;
+  const total = usersMeta?.total ?? (users || []).length;
+  // Server-side search: refetch page 1 on filter change (debounced).
+  useEffect(() => {
+    const t = setTimeout(() => onFilter({ page: 1, q: q.trim() || undefined, role }), 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, role]);
+  const gotoPage = (p) => onFilter({ page: p, q: q.trim() || undefined, role });
+  const rows = users || [];
   return (
     <>
       <Card
         title="User management"
-        sub={`${filtered.length} of ${(users || []).length} users`}
+        sub={`${rows.length} shown · ${total} users total`}
         actions={
           <div className="ops-filters">
             <input
@@ -220,7 +226,7 @@ function Users({ users, onOpen, detail, onClose }) {
               <tr>{['User', 'Role', 'Spaces', 'Projects', 'Last active', 'Joined'].map((h) => <th key={h}>{h}</th>)}</tr>
             </thead>
             <tbody>
-              {filtered.map((u) => (
+              {rows.map((u) => (
                 <tr key={u.id} onClick={() => onOpen(u.id)} className="ops-row-clickable" tabIndex={0}
                     onKeyDown={(e) => { if (e.key === 'Enter') onOpen(u.id); }}>
                   <td>
@@ -238,7 +244,8 @@ function Users({ users, onOpen, detail, onClose }) {
               ))}
             </tbody>
           </table>
-          {filtered.length === 0 && <p className="ops-muted ops-pad">No users match this filter.</p>}
+          {rows.length === 0 && <p className="ops-muted ops-pad">No users match this filter.</p>}
+          <Pagination page={page} pages={pages} total={total} onPage={gotoPage} />
         </div>
       </Card>
       <AnimatePresence>
@@ -299,14 +306,20 @@ function Users({ users, onOpen, detail, onClose }) {
 }
 
 /* ================= SPACES & PROJECTS ================= */
-function SpacesProjects({ spaces, projects }) {
+function SpacesProjects({ spaces, spacesMeta, projects, projectsMeta, onFilter }) {
   const [q, setQ] = useState('');
-  const needle = q.trim().toLowerCase();
-  const sp = (spaces || []).filter((s) => !needle || s.name.toLowerCase().includes(needle) || (s.owner || '').toLowerCase().includes(needle));
-  const pr = (projects || []).filter((p) => !needle || p.name.toLowerCase().includes(needle) || (p.owner || '').toLowerCase().includes(needle) || (p.space || '').toLowerCase().includes(needle));
+  // Server-side search across spaces, projects and owners (debounced).
+  useEffect(() => {
+    const t = setTimeout(() => onFilter('both', { page: 1, q: q.trim() || undefined }), 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+  const sp = spaces || [];
+  const pr = projects || [];
+  const needle = q.trim();
   return (
     <>
-      <Card title="Spaces & projects" sub={`${(spaces || []).length} spaces · ${(projects || []).length} projects platform-wide`}
+      <Card title="Spaces & projects" sub={`${spacesMeta?.total ?? sp.length} spaces · ${projectsMeta?.total ?? pr.length} projects platform-wide`}
         actions={<input type="text" placeholder="Search spaces, projects, owners…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search spaces and projects" className="ops-search" />}>
         <h4 className="ops-subhead">Spaces</h4>
         <div className="ops-table-wrap">
@@ -324,7 +337,8 @@ function SpacesProjects({ spaces, projects }) {
               ))}
             </tbody>
           </table>
-          {sp.length === 0 && <p className="ops-muted ops-pad">No spaces match.</p>}
+          {sp.length === 0 && <p className="ops-muted ops-pad">No spaces match{needle ? ` “${needle}”` : ''}.</p>}
+          <Pagination page={spacesMeta?.page || 1} pages={spacesMeta?.pages || 0} total={spacesMeta?.total} onPage={(p) => onFilter('spaces', { page: p, q: needle || undefined })} />
         </div>
         <h4 className="ops-subhead">Projects</h4>
         <div className="ops-table-wrap">
@@ -343,7 +357,8 @@ function SpacesProjects({ spaces, projects }) {
               ))}
             </tbody>
           </table>
-          {pr.length === 0 && <p className="ops-muted ops-pad">No projects match.</p>}
+          {pr.length === 0 && <p className="ops-muted ops-pad">No projects match{needle ? ` “${needle}”` : ''}.</p>}
+          <Pagination page={projectsMeta?.page || 1} pages={projectsMeta?.pages || 0} total={projectsMeta?.total} onPage={(p) => onFilter('projects', { page: p, q: needle || undefined })} />
         </div>
       </Card>
     </>
@@ -372,8 +387,14 @@ function Activity({ data, onFilter }) {
   const [type, setType] = useState('');
   const [user, setUser] = useState('');
   const [days, setDays] = useState(30);
-  useEffect(() => { onFilter({ days, limit: 50 }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const apply = () => onFilter({ type: type || undefined, user: user || undefined, days, limit: 50 });
+  const [page, setPage] = useState(1);
+  const LIMIT = 50;
+  useEffect(() => { onFilter({ days, limit: LIMIT, page: 1 }); setPage(1); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const apply = (p) => {
+    const next = p || 1;
+    setPage(next);
+    onFilter({ type: type || undefined, user: user || undefined, days, limit: LIMIT, page: next });
+  };
   return (
     <Card title="Platform activity" sub="Every significant event, newest first"
       actions={
@@ -388,10 +409,11 @@ function Activity({ data, onFilter }) {
             <option value={30}>Last 30 days</option>
             <option value={90}>Last 90 days</option>
           </select>
-          <button type="button" onClick={apply} className="ops-apply">Apply</button>
+          <button type="button" onClick={() => apply(1)} className="ops-apply">Apply</button>
         </div>
       }>
       <ActivityList items={data?.items} />
+      <Pagination page={data?.page || page} pages={data?.pages || 0} total={data?.total} onPage={apply} />
     </Card>
   );
 }
@@ -432,11 +454,19 @@ const displayModel = (m) => {
 function AiUsage({ usage, onFilter }) {
   const [feature, setFeature] = useState('');
   const [provider, setProvider] = useState('all');
-  useEffect(() => { onFilter({}); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const apply = () => onFilter({
-    ...(feature.trim() ? { feature: feature.trim() } : {}),
-    ...(provider && provider !== 'all' ? { provider } : {}),
-  });
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 50;
+  useEffect(() => { onFilter({ page: 1, page_size: PAGE_SIZE }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const apply = (p) => {
+    const next = p || 1;
+    setPage(next);
+    onFilter({
+      ...(feature.trim() ? { feature: feature.trim() } : {}),
+      ...(provider && provider !== 'all' ? { provider } : {}),
+      page: next,
+      page_size: PAGE_SIZE,
+    });
+  };
   if (!usage) return <EmptyState title="No AI usage data" body="Usage appears once the platform serves AI requests." />;
   const groups = usage.groups || [];
   const providers = usage.providers || [];
@@ -459,7 +489,7 @@ function AiUsage({ usage, onFilter }) {
             {providers.map((p) => <option key={p} value={p}>{displayProvider(p)}</option>)}
           </select>
         </label>
-        <button type="button" onClick={apply} className="aiu-refresh">Refresh</button>
+        <button type="button" onClick={() => apply(1)} className="aiu-refresh">Refresh</button>
       </div>
       <div className="aiu-kpis">
         <div className="aiu-kpi"><span className="aiu-num">{usage.calls ?? usage.totals?.interactions ?? 0}</span><span className="aiu-label">Calls</span></div>
@@ -494,6 +524,7 @@ function AiUsage({ usage, onFilter }) {
                 ))}
               </tbody>
             </table>
+            <Pagination page={usage.page || page} pages={usage.pages || 0} total={usage.total} onPage={apply} />
           </div>
         )}
       </section>
@@ -687,7 +718,7 @@ function AiEvaluation({ evaluations, onFilter }) {
 }
 
 /* ================= PROCESSING ================= */
-function Processing({ summary, jobs }) {
+function Processing({ summary, jobs, jobsMeta, onPage }) {
   const s = summary || { queued: 0, processing: 0, completed: 0, failed: 0 };
   return (
     <>
@@ -709,6 +740,7 @@ function Processing({ summary, jobs }) {
             <StatusBadge status={j.status} />
           </div>
         ))}
+        <Pagination page={jobsMeta?.page || 1} pages={jobsMeta?.pages || 0} total={jobsMeta?.total} onPage={onPage} />
       </Card>
     </>
   );
@@ -742,15 +774,21 @@ export default function Admin() {
 
   useEffect(() => {
     dispatch(loadAdminOverview());
-    dispatch(loadAdminUsers());
-    dispatch(loadAdminSpaces());
-    dispatch(loadAdminProjects());
+    dispatch(loadAdminUsers({ page: 1, page_size: 15 }));
+    dispatch(loadAdminSpaces({ page: 1, page_size: 15 }));
+    dispatch(loadAdminProjects({ page: 1, page_size: 15 }));
     dispatch(loadAdminActivity({ days: 30, limit: 50 }));
     dispatch(loadAdminJobs());
     dispatch(loadAdminEvaluations({ days: 30 }));
     dispatch(loadAdminUsage());
     dispatch(loadAdminHealth());
   }, [dispatch]);
+
+  const filterUsers = (p) => dispatch(loadAdminUsers({ page_size: 15, ...p }));
+  const filterLists = (kind, p) => {
+    if (kind === 'spaces' || kind === 'both') dispatch(loadAdminSpaces({ page_size: 15, ...p }));
+    if (kind === 'projects' || kind === 'both') dispatch(loadAdminProjects({ page_size: 15, ...p }));
+  };
 
   const openUser = (id) => {
     setOpenUserId(id);
@@ -790,9 +828,15 @@ export default function Admin() {
 
       {tab === 'Overview' && <Overview ov={admin.overview} />}
       {tab === 'Users' && (
-        <Users users={admin.users} onOpen={openUser} detail={detail} onClose={() => setOpenUserId(null)} />
+        <Users users={admin.users} usersMeta={admin.usersMeta} onOpen={openUser} detail={detail} onClose={() => setOpenUserId(null)} onFilter={filterUsers} />
       )}
-      {tab === 'Spaces & Projects' && <SpacesProjects spaces={admin.spaces} projects={admin.projects} />}
+      {tab === 'Spaces & Projects' && (
+        <SpacesProjects
+          spaces={admin.spaces} spacesMeta={admin.spacesMeta}
+          projects={admin.projects} projectsMeta={admin.projectsMeta}
+          onFilter={filterLists}
+        />
+      )}
       {tab === 'Activity' && (
         <Activity data={admin.activity} onFilter={(p) => dispatch(loadAdminActivity(p))} />
       )}
@@ -802,7 +846,12 @@ export default function Admin() {
       {tab === 'AI Evaluation' && (
         <AiEvaluation evaluations={admin.evaluations} onFilter={(p) => dispatch(loadAdminEvaluations(p))} />
       )}
-      {tab === 'Processing' && <Processing summary={admin.jobSummary} jobs={admin.jobs} />}
+      {tab === 'Processing' && (
+        <Processing
+          summary={admin.jobSummary} jobs={admin.jobs} jobsMeta={admin.jobsMeta}
+          onPage={(p) => dispatch(loadAdminJobs({ page: p, page_size: 20 }))}
+        />
+      )}
       {tab === 'Health' && <Health health={admin.health} />}
     </motion.div>
   );

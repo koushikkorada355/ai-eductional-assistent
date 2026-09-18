@@ -167,6 +167,15 @@ def update_mastery_from_quiz_task(quiz_question_id: str) -> str:
             )
         except Exception as he:
             logger.warning(f"[mastery.quiz] history skipped q={quiz_question_id}: {he}")
+        # Keep Project.overall_progress live (best-effort; never breaks mastery).
+        try:
+            from app.services.analytics_service import recompute_project_progress
+
+            _quiz = db.get(Quiz, question.quiz_id)
+            if _quiz is not None:
+                recompute_project_progress(db, _quiz.project_id)
+        except Exception as pe:
+            logger.warning(f"[mastery.quiz] progress recompute skipped q={quiz_question_id}: {pe}")
         logger.success(f"[mastery.quiz] concept={concept.name} new={concept.mastery_level}")
         return f"updated:{concept.mastery_level}"
     except Exception as e:
@@ -337,6 +346,16 @@ def evaluate_submission_task(self, quiz_id: str) -> str:
         quiz = db.get(Quiz, uuid.UUID(quiz_id))
         quiz.status = "completed"
         db.commit()
+        from app.services.event_service import emit_event, owner_of_project, QUIZ_COMPLETED
+
+        emit_event(
+            db,
+            type=QUIZ_COMPLETED,
+            user_id=owner_of_project(db, quiz.project_id),
+            project_id=quiz.project_id,
+            text=f"Quiz '{quiz.name}' completed",
+            event_key=f"quiz:{quiz.id}",
+        )
         logger.success(f"[quiz.submit_task] quiz={quiz_id} completed")
         return "completed"
     except Exception as e:

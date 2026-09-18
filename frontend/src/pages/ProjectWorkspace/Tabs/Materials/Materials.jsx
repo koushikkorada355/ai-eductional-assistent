@@ -22,8 +22,23 @@ export default function Materials({ spaceId, projectId }) {
     if (spaceId && projectId) dispatch(loadDocuments({ spaceId, projectId }));
   }, [dispatch, spaceId, projectId]);
 
+  const MAX_MB = 25;
   const send = async (file) => {
     if (!file || uploading) return;
+    // Fail fast in the browser with an actionable message (saves a round-trip).
+    if (file.size === 0) {
+      setUploadError('That file is empty. Please choose a valid PDF.');
+      return;
+    }
+    if (file.size > MAX_MB * 1024 * 1024) {
+      setUploadError(`PDF too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Max is ${MAX_MB}MB.`);
+      return;
+    }
+    const isPdf = file.type === 'application/pdf' || (file.name || '').toLowerCase().endsWith('.pdf');
+    if (!isPdf) {
+      setUploadError('Only PDF files are allowed.');
+      return;
+    }
     setUploading(true);
     setUploadError(null);
     try {
@@ -69,6 +84,9 @@ export default function Materials({ spaceId, projectId }) {
             <StatusBadge status={selected.status} />
             <span className="text-[11px] text-muted">{selected.pages || 0} pages · {selected.chunks || 0} chunks</span>
           </div>
+          {selected.error && (
+            <p className={selected.status === 'failed' ? 'error' : 'text-sm text-muted'}>{selected.error}</p>
+          )}
           <h4 className="font-display text-sm font-semibold text-heading">Extracted Evidence</h4>
           {evidenceLoading && <p className="text-sm text-muted">Loading evidence...</p>}
           {evidence?.error && <p className="error">{evidence.error}</p>}
@@ -141,6 +159,12 @@ export default function Materials({ spaceId, projectId }) {
               </span>
               <span className="hidden text-[11px] text-muted md:inline">{d.pages != null ? `${d.pages} pages · ` : ''}{d.created_at ? new Date(d.created_at).toLocaleDateString() : ''}</span>
               <StatusBadge status={d.status} />
+              {d.status === 'failed' && d.error && (
+                <span className="w-full text-[12px] text-danger" title={d.error}>{d.error}</span>
+              )}
+              {d.status === 'queued' && d.error && (
+                <span className="w-full text-[12px] text-muted" title={d.error}>{d.error}</span>
+              )}
               <span className="flex items-center gap-1">
                 <button type="button" onClick={() => openDetail(d)} className="rounded-md px-2 py-1 text-[13px] font-medium text-muted hover:bg-primary-soft hover:text-primary">View</button>
                 {(d.status === 'failed' || d.status === 'queued') && (

@@ -8,6 +8,7 @@ import {
   askTutorInConversation,
   describeApiError,
 } from './tutorApi.js';
+import { pageItems, pageMeta } from '../../utils/paging.js';
 
 export function normalizeCitations(raw) {
   let list = raw;
@@ -74,8 +75,8 @@ function sortConversations(list) {
 
 export const loadConversations = createAsyncThunk(
   'tutor/loadConversations',
-  async ({ spaceId, projectId }, { rejectWithValue }) => {
-    try { return await listConversations(spaceId, projectId); }
+  async ({ spaceId, projectId, page, pageSize }, { rejectWithValue }) => {
+    try { return await listConversations(spaceId, projectId, { page: page || 1, page_size: pageSize || 20 }); }
     catch (e) { return rejectWithValue(describeApiError(e, 'load conversations')); }
   }
 );
@@ -130,6 +131,7 @@ export const sendQuestion = createAsyncThunk(
 
 const initialState = {
   conversations: [],
+  conversationsMeta: { total: 0, page: 1, pageSize: 20, pages: 0 },
   projectKey: null,
   activeId: null,
   messagesById: {},
@@ -161,6 +163,7 @@ const slice = createSlice({
       const key = a.payload || null;
       if (state.projectKey === key) return;
       state.conversations = [];
+      state.conversationsMeta = { total: 0, page: 1, pageSize: 20, pages: 0 };
       state.projectKey = key;
       state.activeId = null;
       state.messagesById = {};
@@ -174,6 +177,7 @@ const slice = createSlice({
     },
     clearTutor(state) {
       state.conversations = [];
+      state.conversationsMeta = { total: 0, page: 1, pageSize: 20, pages: 0 };
       state.activeId = null;
       state.messagesById = {};
       state.loadedById = {};
@@ -188,7 +192,8 @@ const slice = createSlice({
     b.addCase(loadConversations.pending, (s) => { s.listStatus = 'loading'; s.error = null; })
       .addCase(loadConversations.fulfilled, (s, a) => {
         s.listStatus = 'succeeded';
-        s.conversations = sortConversations(a.payload || []);
+        s.conversations = sortConversations(pageItems(a.payload));
+        s.conversationsMeta = pageMeta(a.payload);
       })
       .addCase(loadConversations.rejected, (s, a) => { s.listStatus = 'failed'; s.error = a.payload; })
       .addCase(newConversation.pending, (s) => { s.createStatus = 'creating'; s.createError = null; })
@@ -228,7 +233,7 @@ const slice = createSlice({
         const { conversationId, messages } = a.payload;
         s.loadingById[conversationId] = false;
         s.loadedById[conversationId] = true;
-        s.messagesById[conversationId] = (messages || []).map(normalizeMessage);
+        s.messagesById[conversationId] = pageItems(messages).map(normalizeMessage);
       })
       .addCase(loadConversationMessages.rejected, (s, a) => {
         s.loadingById[a.meta.arg.conversationId] = false;

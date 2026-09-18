@@ -4,10 +4,10 @@ Ownership uses the same pattern as the nested routes: every block validates
 that the project/quiz belongs to the authenticated user via dependency
 injection (get_owned_project_by_id / get_owned_quiz).
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
-from typing import List, Optional, Any
+from typing import Optional, Any
 from uuid import UUID
 from loguru import logger
 
@@ -15,8 +15,10 @@ from app.db.session import get_db
 from app.api.deps import get_owned_project_by_id, get_owned_quiz
 from app.db.models.project import Project
 from app.db.models.assessment import Concept, Quiz, QuizQuestion
-from app.schemas.quiz import QuizQuestionOut, QuizQuestionResultOut, QuizAttemptOut, QuizDetailOut
+from app.schemas.quiz import QuizQuestionOut, QuizDetailOut
+from app.utils.pagination import MAX_PAGE_SIZE, PageOut, paginate_query, page_envelope
 from app.ai.graphs.quiz_graph import quiz_app
+from app.db.checkpointer import robust_ainvoke
 from app.ai.nodes import evaluate_answer, update_mastery, MAX_QUESTIONS
 
 router = APIRouter()
@@ -192,7 +194,7 @@ async def start_quiz_legacy(
 
     config = {"configurable": {"thread_id": str(quiz.id)}}
     try:
-        result = await quiz_app.ainvoke(_initial_state(str(project.id), str(quiz.id), 0), config=config)
+        result = await robust_ainvoke(quiz_app, _initial_state(str(project.id), str(quiz.id), 0), config=config)
     except Exception as e:
         logger.error(f"[quiz.start] graph failed quiz={quiz.id}: {e}")
         raise HTTPException(status_code=500, detail="Quiz generation failed")
@@ -250,7 +252,8 @@ async def submit_answer(
 
     config = {"configurable": {"thread_id": str(quiz.id)}}
     try:
-        result = await quiz_app.ainvoke(
+        result = await robust_ainvoke(
+            quiz_app,
             _initial_state(str(quiz.project_id), str(quiz.id), answered), config=config
         )
     except Exception as e:
@@ -265,19 +268,27 @@ async def submit_answer(
     return {"evaluation": evaluation, "next_question": nxt, "questions_answered": answered, "done": False}
 
 
-@router.get("/projects/{project_id}/quizzes", response_model=List[QuizAttemptOut])
+@router.get("/projects/{project_id}/quizzes", response_model=PageOut)
 def list_attempts(
     project: Project = Depends(get_owned_project_by_id),
     db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=10, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
 ):
-    quizzes = (
+    rows, total, page, page_size = paginate_query(
         db.query(Quiz)
         .filter(Quiz.project_id == project.id)
-        .order_by(Quiz.created_at.desc())
-        .all()
+        .order_by(Quiz.created_at.desc()),
+        page, page_size,
     )
+    # Exact stat cards without loading every quiz's questions.
+    completed = db.query(Quiz).filter(
+        Quiz.project_id == project.id, Quiz.status == "completed").count()
+    active = db.query(Quiz).filter(
+        Quiz.project_id == project.id,
+        Quiz.status.in_(["in_progress", "generating", "evaluating"])).count()
     out = []
-    for q in quizzes:
+    for q in rows:
         questions = db.query(QuizQuestion).filter(QuizQuestion.quiz_id == q.id).all()
         answered = sum(1 for x in questions if x.user_answer is not None)
         out.append(
@@ -292,7 +303,9 @@ def list_attempts(
                 "average_score": _average_score(questions),
             }
         )
-    return out
+    env = page_envelope(out, total, page, page_size)
+    env["summary"] = {"total": total, "completed": completed, "active": active}
+    return env
 
 
 def _serialize_result(q: QuizQuestion, reveal: bool) -> dict:

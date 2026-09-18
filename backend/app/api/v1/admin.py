@@ -8,11 +8,13 @@ recommendations log), endpoints report honestly instead of fabricating data.
 """
 from collections import defaultdict
 from datetime import datetime, timedelta
+from math import ceil
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -32,6 +34,7 @@ from app.db.models.project import Project
 from app.db.models.space import Space
 from app.db.models.user import User
 from app.db.session import get_db
+from app.utils.pagination import MAX_PAGE_SIZE, PageOut, paginate_list, paginate_query, page_envelope
 
 router = APIRouter()
 
@@ -310,12 +313,25 @@ def _recent_activity(db, users, space_by_id, project_by_id, project_user, limit=
     return feed[:limit]
 
 
-@router.get("/admin/users")
-def admin_users(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    users = db.query(User).order_by(User.created_at.desc()).all()
+@router.get("/admin/users", response_model=PageOut)
+def admin_users(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=15, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
+    q: Optional[str] = Query(default=None, description="Substring match on name or email"),
+    role: Optional[str] = Query(default=None, description="Filter by role ('user' | 'admin')"),
+):
+    query = db.query(User).order_by(User.created_at.desc())
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        query = query.filter(or_(User.email.ilike(like), User.name.ilike(like)))
+    if role and role != "all":
+        query = query.filter(User.role == role)
+    rows, total, page, page_size = paginate_query(query, page, page_size)
     _, _, _, project_user = _maps(db)
     out = []
-    for u in users:
+    for u in rows:
         spaces = db.query(Space).filter(Space.user_id == u.id).all()
         project_count = db.query(Project).filter(Project.space_id.in_([s.id for s in spaces])).count() if spaces else 0
         out.append({
@@ -325,7 +341,7 @@ def admin_users(admin: User = Depends(require_admin), db: Session = Depends(get_
             "last_active": _user_last_active(db, u.id, project_user),
             "created_at": u.created_at,
         })
-    return out
+    return page_envelope(out, total, page, page_size)
 
 
 @router.get("/admin/users/{user_id}")
@@ -404,11 +420,23 @@ def admin_user_detail(user_id: UUID, admin: User = Depends(require_admin), db: S
     }
 
 
-@router.get("/admin/spaces")
-def admin_spaces(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+@router.get("/admin/spaces", response_model=PageOut)
+def admin_spaces(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=15, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
+    q: Optional[str] = Query(default=None, description="Substring match on space or owner"),
+):
     users, _, _, _ = _maps(db)
+    query = db.query(Space).order_by(Space.created_at.desc())
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        query = query.outerjoin(User, User.id == Space.user_id).filter(
+            or_(Space.name.ilike(like), User.email.ilike(like), User.name.ilike(like)))
+    rows, total, page, page_size = paginate_query(query, page, page_size)
     out = []
-    for s in db.query(Space).order_by(Space.created_at.desc()).all():
+    for s in rows:
         projects = db.query(Project).filter(Project.space_id == s.id).all()
         pids = [p.id for p in projects]
         activity = len(projects)
@@ -429,14 +457,28 @@ def admin_spaces(admin: User = Depends(require_admin), db: Session = Depends(get
             "projects": len(projects), "activity": activity,
             "last_activity": last, "created_at": s.created_at,
         })
-    return out
+    return page_envelope(out, total, page, page_size)
 
 
-@router.get("/admin/projects")
-def admin_projects(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+@router.get("/admin/projects", response_model=PageOut)
+def admin_projects(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=15, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
+    q: Optional[str] = Query(default=None, description="Substring match on project, space or owner"),
+):
     users, space_by_id, _, project_user = _maps(db)
+    query = db.query(Project).order_by(Project.created_at.desc())
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        query = (query.outerjoin(Space, Space.id == Project.space_id)
+                 .outerjoin(User, User.id == Space.user_id)
+                 .filter(or_(Project.name.ilike(like), Space.name.ilike(like),
+                              User.email.ilike(like), User.name.ilike(like))))
+    rows, total, page, page_size = paginate_query(query, page, page_size)
     out = []
-    for p in db.query(Project).order_by(Project.created_at.desc()).all():
+    for p in rows:
         s = space_by_id.get(p.space_id)
         owner = users.get(project_user.get(p.id))
         docs = db.query(Document).filter(Document.project_id == p.id).count()
@@ -452,7 +494,7 @@ def admin_projects(admin: User = Depends(require_admin), db: Session = Depends(g
             "last_active": _project_last_active(db, p.id),
             "created_at": p.created_at,
         })
-    return out
+    return page_envelope(out, total, page, page_size)
 
 
 @router.get("/admin/activity")
@@ -464,6 +506,7 @@ def admin_activity(
     project: Optional[str] = Query(default=None, description="Filter by project id"),
     days: int = Query(default=30, ge=1, le=365),
     limit: int = Query(default=50, ge=1, le=100),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
 ):
     users, space_by_id, project_by_id, project_user = _maps(db)
     feed = _recent_activity(db, users, space_by_id, project_by_id, project_user, limit=500)
@@ -482,8 +525,10 @@ def admin_activity(
             raise HTTPException(status_code=422, detail="Invalid project id")
         pname = project_by_id.get(pid).name if project_by_id.get(pid) else None
         feed = [e for e in feed if e["project"] == pname]
-    return {"types": types,
-            "items": feed[:limit]}
+    items, total, page, page_size = paginate_list(feed, page, limit)
+    return {"types": types, "items": items,
+            "total": total, "page": page, "page_size": page_size,
+            "pages": ceil(total / page_size) if total else 0}
 
 
 @router.get("/admin/learning")
@@ -543,7 +588,12 @@ def admin_learning(admin: User = Depends(require_admin), db: Session = Depends(g
 
 
 @router.get("/admin/jobs")
-def admin_jobs(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+def admin_jobs(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=20, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
+):
     """Background work is tracked via status strings on documents/quizzes/
     assignments (no jobs table exists), so active + recent work is derived
     from non-terminal statuses. terminal=False marks still-running work."""
@@ -595,9 +645,12 @@ def admin_jobs(admin: User = Depends(require_admin), db: Session = Depends(get_d
                      "status": a.status, "terminal": terminal,
                      "user": owner_of(a.project_id), "started": a.created_at})
     jobs.sort(key=lambda j: j["started"] or datetime.min, reverse=True)
+    items, total, page, page_size = paginate_list(jobs, page, page_size)
     return {"summary": {"queued": queued, "processing": processing,
                         "completed": completed, "failed": failed},
-            "items": jobs[:50]}
+            "items": items, "total": total, "page": page,
+            "page_size": page_size,
+            "pages": ceil(total / page_size) if total else 0}
 
 
 @router.get("/admin/evaluations")
@@ -605,6 +658,8 @@ def admin_evaluations(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
     days: int = Query(default=30, ge=0, le=3650, description="Last N days; 0 = all time"),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
 ):
     """AI quality dashboard: tutor groundedness · retrieval · assessment · recommendations.
 
@@ -721,19 +776,19 @@ def admin_evaluations(
     rec_usage = [r for r in usage_in_range if (r.feature or "") == "recommendations"]
     rec_total = sum(r.calls or 1 for r in rec_usage)
 
-    # ---- Recent items (back-compat for old UI) ----
-    recent_hist = sorted(hist, key=lambda h: h.created_at or datetime.min, reverse=True)[:50]
+    # ---- Recent items (paginated) ----
+    recent_hist = sorted(hist, key=lambda h: h.created_at or datetime.min, reverse=True)
     concepts = {c.id: c.name for c in db.query(Concept).all()}
     users = {u.id: u.email for u in db.query(User).all()}
-    items = [{
+    all_items = [{
         "id": h.id, "user": users.get(h.user_id),
         "concept": concepts.get(h.concept_id, "Unknown"),
         "question_type": h.question_type,
         "is_correct": h.is_correct, "feedback": h.evaluator_feedback,
         "created_at": h.created_at,
     } for h in recent_hist]
-    total_items = len(items)
-    correct = sum(1 for i in items if i["is_correct"])
+    items, total_items, page, page_size = paginate_list(all_items, page, page_size)
+    correct_all = sum(1 for i in all_items if i["is_correct"])
 
     tracked = bool(answers or questions or hist or usage_in_range)
     return {
@@ -741,10 +796,12 @@ def admin_evaluations(
         "range": {"days": days,
                   "from": cutoff.isoformat() if cutoff else None,
                   "to": datetime.utcnow().isoformat()},
-        # Back-compat keys for the previous minimal UI.
-        "correctRate": round(correct / total_items * 100, 1) if total_items else 0,
+        # Back-compat keys for the previous minimal UI (computed over all in-range items).
+        "correctRate": round(correct_all / total_items * 100, 1) if total_items else 0,
         "evaluated": total_items,
         "items": items,
+        "total": total_items, "page": page, "page_size": page_size,
+        "pages": ceil(total_items / page_size) if total_items else 0,
         "tutor": {
             "answers": answers,
             "supported": supported,
@@ -785,6 +842,8 @@ def admin_ai_usage(
     feature: Optional[str] = Query(default=None, description="Substring filter on feature name"),
     provider: Optional[str] = Query(default=None, description="Exact provider filter ('inception', 'groq', 'none', ...)"),
     days: int = Query(default=30, ge=1, le=365),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
 ):
     """Screenshot-style usage: totals + feature × provider × model × day table.
 
@@ -864,6 +923,7 @@ def admin_ai_usage(
                "avgMs": round(sum(v["lat"]) / len(v["lat"]), 1) if v["lat"] else None}
               for k, v in grouped.items()]
     groups.sort(key=lambda g: g["day"], reverse=True)
+    page_items, groups_total, page, page_size = paginate_list(groups, page, page_size)
 
     feats = defaultdict(int)
     for r in filt:
@@ -874,7 +934,9 @@ def admin_ai_usage(
             "calls": calls, "tokens": tokens, "cost": cost,
             "errorRate": error_rate, "latencyP50": p50, "latencyP95": p95,
             "providers": providers,
-            "groups": groups[:200],
+            "groups": page_items,
+            "total": groups_total, "page": page, "page_size": page_size,
+            "pages": ceil(groups_total / page_size) if groups_total else 0,
             "totals": {"interactions": calls, "tutorMessages": len(messages)},
             "byFeature": [{"feature": f, "interactions": v}
                           for f, v in sorted(feats.items())]}

@@ -14,6 +14,9 @@ class Document(Base):
     file_path = Column(String, nullable=False)
     file_hash = Column(String(64), nullable=True, index=True)
     status = Column(String, default="queued", nullable=False)
+    # Human-readable failure reason for status="failed" (NULL otherwise).
+    # Surfaced to the UI so production upload errors are diagnosable.
+    error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 class DocumentChunk(Base):

@@ -6,7 +6,7 @@ Flow:
 - GET    /{project_id}/assignments/{assignment_id} -> detail (answers revealed only when submitted)
 - POST   /{project_id}/assignments/{assignment_id}/submit -> row (evaluating) + graph task -> poll ──► submitted
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from uuid import UUID
 from app.db.session import get_db
@@ -14,12 +14,12 @@ from app.api.deps import get_owned_project
 from app.db.models.assessment import Assignment, AssignmentQuestion, AssignmentSubmission, Concept
 from app.db.models.project import Project
 from app.schemas.assignment import (
-    AssignmentListOut,
     AssignmentDetailOut,
     CreateAssignmentRequest,
     SubmitAssignmentRequest,
 )
 from app.services.assignment_service import is_correct
+from app.utils.pagination import MAX_PAGE_SIZE, PageOut, paginate_query, page_envelope
 from loguru import logger
 
 router = APIRouter()
@@ -90,20 +90,25 @@ def _detail_payload(assignment: Assignment, db: Session) -> dict:
     }
 
 
-@router.get("/{project_id}/concepts")
+@router.get("/{project_id}/concepts", response_model=PageOut)
 async def list_concepts(
     project: Project = Depends(get_owned_project),
     db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
 ):
-    """List all concepts for a project."""
-    concepts = db.query(Concept).filter(Concept.project_id == project.id).all()
-    return [{
+    """List concepts for a project (paginated)."""
+    rows, total, page, page_size = paginate_query(
+        db.query(Concept).filter(Concept.project_id == project.id).order_by(Concept.created_at),
+        page, page_size,
+    )
+    return page_envelope([{
         "id": str(c.id),
         "name": c.name,
         "description": c.description,
         "mastery_level": c.mastery_level,
         "document_id": str(c.document_id) if c.document_id else None,
-    } for c in concepts]
+    } for c in rows], total, page, page_size)
 
 
 @router.post("/{project_id}/assignments", response_model=AssignmentDetailOut)
@@ -156,17 +161,42 @@ def create_assignment(
     return _detail_payload(assignment, db)
 
 
-@router.get("/{project_id}/assignments", response_model=list[AssignmentListOut])
+@router.get("/{project_id}/assignments", response_model=PageOut)
 def list_assignments(
     project: Project = Depends(get_owned_project),
     db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=10, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
 ):
-    """List all assignments for a project with scores."""
-    assignments = db.query(Assignment).filter(
-        Assignment.project_id == project.id
-    ).order_by(Assignment.created_at.desc()).all()
+    """List assignments for a project with scores (paginated)."""
+    rows, total, page, page_size = paginate_query(
+        db.query(Assignment).filter(
+            Assignment.project_id == project.id
+        ).order_by(Assignment.created_at.desc()),
+        page, page_size,
+    )
+    # Exact stat cards from two light queries (ids + submission score/total
+    # only — never loads questions or answer blobs).
+    id_status = db.query(Assignment.id, Assignment.status).filter(
+        Assignment.project_id == project.id).all()
+    sub_rows = []
+    if id_status:
+        sub_rows = db.query(
+            AssignmentSubmission.assignment_id,
+            AssignmentSubmission.score,
+            AssignmentSubmission.total,
+        ).filter(AssignmentSubmission.assignment_id.in_([r[0] for r in id_status])).all()
+    submitted_ids = {r[0] for r in sub_rows}
+    active = sum(1 for aid, st in id_status
+                 if st in ("generating", "evaluating") and aid not in submitted_ids)
+    ready = sum(1 for i, st in id_status
+                if st == "ready" and i not in submitted_ids)
+    scored = [(r[1] / r[2] * 100) for r in sub_rows if r[2]]
+    summary = {"total": total, "ready": ready, "active": active,
+               "submitted": len(submitted_ids),
+               "avg": round(sum(scored) / len(scored)) if scored else None}
     out = []
-    for a in assignments:
+    for a in rows:
         num_q = db.query(AssignmentQuestion).filter(
             AssignmentQuestion.assignment_id == a.id
         ).count()
@@ -181,7 +211,9 @@ def list_assignments(
             "score": sub.score if sub else None,
             "created_at": a.created_at,
         })
-    return out
+    env = page_envelope(out, total, page, page_size)
+    env["summary"] = summary
+    return env
 
 
 @router.get("/{project_id}/assignments/{assignment_id}", response_model=AssignmentDetailOut)

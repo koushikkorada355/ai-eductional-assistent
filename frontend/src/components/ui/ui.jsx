@@ -94,3 +94,21 @@ export function Card({ children, className }) {
     </div>
   );
 }
+
+export function Pagination({ page, pages, total, onPage }) {
+  if (!pages || pages <= 1) return null;
+  const prev = () => onPage && onPage(Math.max(1, page - 1));
+  const next = () => onPage && onPage(Math.min(pages, page + 1));
+  const btn = 'inline-flex min-h-8 items-center rounded-md border border-line bg-surface px-3 text-[13px] font-medium text-ink hover:border-primary hover:text-primary disabled:cursor-default disabled:opacity-40';
+  return (
+    <div className="mt-3 flex items-center justify-between gap-2" aria-label="Pagination">
+      <span className="text-xs text-muted">
+        Page {page} of {pages}{typeof total === 'number' ? ` · ${total} total` : ''}
+      </span>
+      <span className="flex items-center gap-2">
+        <button type="button" onClick={prev} disabled={page <= 1} className={btn} aria-label="Previous page">← Prev</button>
+        <button type="button" onClick={next} disabled={page >= pages} className={btn} aria-label="Next page">Next →</button>
+      </span>
+    </div>
+  );
+}

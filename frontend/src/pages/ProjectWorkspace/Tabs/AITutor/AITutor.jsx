@@ -144,6 +144,10 @@ export default function AITutor({ spaceId, projectId, conversationId, onSelectCo
   }, [dispatch, spaceId, projectId]);
 
   const conversations = useMemo(() => tutor.conversations || [], [tutor.conversations]);
+  const conversationsMeta = tutor.conversationsMeta || { total: 0, page: 1, pageSize: 20, pages: 0 };
+  const gotoConvPage = (p) => {
+    if (spaceId && projectId) dispatch(loadConversations({ spaceId, projectId, page: p, pageSize: 20 }));
+  };
   const listLoaded = tutor.listStatus === 'succeeded' || tutor.listStatus === 'failed';
 
   // Deep link / back-forward: activate the conversation from the URL.
@@ -304,6 +308,8 @@ export default function AITutor({ spaceId, projectId, conversationId, onSelectCo
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-line bg-surface shadow-sm lg:flex-row">
       <ConversationSidebar
         conversations={conversations}
+        conversationsMeta={conversationsMeta}
+        onPage={gotoConvPage}
         activeId={conversationId}
         creating={tutor.createStatus === 'creating'}
         createError={tutor.createError}

@@ -75,7 +75,21 @@ async def lifespan(app: FastAPI):
                 conn.execute(text("ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS total_tokens INTEGER DEFAULT 0"))
                 conn.execute(text("ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS cost_usd FLOAT DEFAULT 0"))
                 conn.execute(text("ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS calls INTEGER DEFAULT 1"))
+                # Document failure reason surfaced to UI (prod upload debugging).
+                conn.execute(text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS error TEXT"))
                 conn.commit()
+            # Upload storage must exist and be writable on web AND worker.
+            # Prod: mount the SAME Railway volume into both services and set UPLOAD_DIR=/data/uploads.
+            try:
+                import os
+                from app.config import settings as _upload_settings
+                _upload_dir = os.path.abspath(
+                    (getattr(_upload_settings, "UPLOAD_DIR", None) or os.getenv("UPLOAD_DIR", "uploads")).strip() or "uploads"
+                )
+                os.makedirs(_upload_dir, exist_ok=True)
+                logger.info(f"Upload dir ready: {_upload_dir} (set UPLOAD_DIR to share web+worker storage)")
+            except Exception as e:
+                logger.warning(f"Upload dir init skipped: {e}")
             logger.success("Database connected and tables created.")
             break
         except OperationalError as e:

@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { loadAssignments, createAssignmentThunk, loadAssignment, submitAssignmentThunk, clearSelected } from '../../../../features/assignments/assignmentsSlice.js';
 import { loadConcepts } from '../../../../features/concepts/conceptsSlice.js';
 import ConfirmModal from '../../../../components/ConfirmModal/ConfirmModal.jsx';
-import { PageHeader, Stat, StatusBadge, EmptyState, Spinner, ProgressBar } from '../../../../components/ui/ui.jsx';
+import { PageHeader, Stat, StatusBadge, EmptyState, Spinner, ProgressBar, Pagination } from '../../../../components/ui/ui.jsx';
 import { IconArrowRight, IconArrowLeft, IconPlus } from '../../../../components/icons/Icons.jsx';
 
 const FILTERS = [
@@ -24,11 +24,13 @@ function filterMatch(a, f) {
 
 export default function Assignments({ spaceId, projectId }) {
   const dispatch = useDispatch();
-  const { assignments, selectedAssignment, status, error } = useSelector((s) => s.assignments);
+  const { assignments, assignmentsMeta, assignmentsSummary, selectedAssignment, status, error } = useSelector((s) => s.assignments);
   const { concepts } = useSelector((s) => s.concepts);
 
   const [view, setView] = useState('list');
   const [filter, setFilter] = useState('all');
+  const [listPage, setListPage] = useState(1);
+  const LIST_SIZE = 10;
   const [selectedConcepts, setSelectedConcepts] = useState([]);
   const [title, setTitle] = useState('');
   const [numQuestions, setNumQuestions] = useState(5);
@@ -37,9 +39,15 @@ export default function Assignments({ spaceId, projectId }) {
 
   useEffect(() => {
     if (projectId && spaceId) {
-      dispatch(loadAssignments({ spaceId, projectId }));
+      dispatch(loadAssignments({ spaceId, projectId, page: 1, pageSize: LIST_SIZE }));
+      setListPage(1);
     }
   }, [dispatch, projectId, spaceId]);
+
+  const gotoListPage = (p) => {
+    setListPage(p);
+    dispatch(loadAssignments({ spaceId, projectId, page: p, pageSize: LIST_SIZE }));
+  };
 
   useEffect(() => {
     if (view === 'select-concepts' && projectId && spaceId) {
@@ -113,7 +121,7 @@ export default function Assignments({ spaceId, projectId }) {
     dispatch(clearSelected());
     setAnswers({});
     setView('list');
-    dispatch(loadAssignments({ spaceId, projectId }));
+    dispatch(loadAssignments({ spaceId, projectId, page: listPage, pageSize: LIST_SIZE }));
   };
 
   const answeredCount = Object.keys(answers).length;
@@ -142,7 +150,10 @@ export default function Assignments({ spaceId, projectId }) {
     }
   }, [view, detailStatus]);
 
+  // Exact totals come from the server summary so the cards stay correct
+  // at any scale; the status filter applies to the loaded page.
   const stats = useMemo(() => {
+    if (assignmentsSummary) return assignmentsSummary;
     const list = assignments || [];
     const ready = list.filter((a) => a.status === 'ready').length;
     const active = list.filter((a) => ['generating', 'evaluating'].includes(a.status)).length;
@@ -152,16 +163,12 @@ export default function Assignments({ spaceId, projectId }) {
       ? Math.round(scored.reduce((s, a) => s + (a.score / a.total) * 100, 0) / scored.length)
       : null;
     return { total: list.length, ready, active, submitted: submitted.length, avg };
-  }, [assignments]);
+  }, [assignments, assignmentsSummary]);
 
   const visible = useMemo(
     () => (assignments || []).filter((a) => filterMatch(a, filter)),
     [assignments, filter]
   );
-  // Previous-assignments history: show recent first, expand on demand.
-  const [showAllHistory, setShowAllHistory] = useState(false);
-  useEffect(() => { setShowAllHistory(false); }, [filter]);
-  const shown = showAllHistory ? visible : visible.slice(0, 5);
 
   /* ---------------- list: status at a glance → filter → open ---------------- */
   if (view === 'list') {
@@ -244,7 +251,7 @@ export default function Assignments({ spaceId, projectId }) {
           ) : (
             <>
             <ul className="divide-y divide-line">
-              {shown.map((a) => (
+              {visible.map((a) => (
                 <li key={a.id}>
                   <button
                     type="button"
@@ -272,16 +279,9 @@ export default function Assignments({ spaceId, projectId }) {
                 </li>
               ))}
             </ul>
-            {visible.length > 5 && (
-              <button
-                type="button"
-                onClick={() => setShowAllHistory((v) => !v)}
-                aria-expanded={showAllHistory}
-                className="flex w-full items-center justify-center border-t border-line px-4 py-3 text-sm font-medium text-muted transition-colors hover:bg-canvas hover:text-primary"
-              >
-                {showAllHistory ? 'Show less' : `View all ${visible.length} assignments →`}
-              </button>
-            )}
+            <div className="border-t border-line px-4 py-2 sm:px-5">
+              <Pagination page={assignmentsMeta.page} pages={assignmentsMeta.pages} total={assignmentsMeta.total} onPage={gotoListPage} />
+            </div>
             </>
           )}
         </motion.div>

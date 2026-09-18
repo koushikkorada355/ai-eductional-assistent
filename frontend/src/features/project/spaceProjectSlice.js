@@ -4,6 +4,7 @@ import {
   fetchProjects, createProject, updateProject, deleteProject,
   uploadPdf, fetchDocuments, retryDocument as retryDocumentApi, deleteDocument as deleteDocumentApi,
 } from './projectApi.js';
+import { pageItems } from '../../utils/paging.js';
 
 export const loadSpaces = createAsyncThunk('spaceProject/loadSpaces', async (_, { rejectWithValue }) => {
   try { return await fetchSpaces(); } catch (e) { return rejectWithValue('Failed to load spaces'); }
@@ -32,8 +33,19 @@ export const editProject = createAsyncThunk('spaceProject/editProject', async ({
 export const removeProject = createAsyncThunk('spaceProject/removeProject', async ({ spaceId, projectId }, { rejectWithValue }) => {
   try { await deleteProject(spaceId, projectId); return { spaceId, projectId }; } catch (e) { return rejectWithValue('Failed to delete project'); }
 });
+const extractDetail = (e, fallback) => {
+  const detail = e?.response?.data?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail.map((d) => (typeof d === 'string' ? d : d?.msg)).filter(Boolean);
+    if (msgs.length) return msgs.join('; ');
+  }
+  if (e?.code === 'ECONNABORTED') return 'Upload timed out. Try a smaller PDF or check your connection.';
+  if (!e?.response) return 'Cannot reach server. Check your connection and try again.';
+  return fallback;
+};
 export const uploadDocument = createAsyncThunk('spaceProject/uploadDocument', async ({ spaceId, projectId, file }, { rejectWithValue }) => {
-  try { return await uploadPdf(spaceId, projectId, file); } catch (e) { return rejectWithValue(e.response?.data?.detail || 'PDF upload failed'); }
+  try { return await uploadPdf(spaceId, projectId, file); } catch (e) { return rejectWithValue(extractDetail(e, 'PDF upload failed')); }
 });
 export const loadDocuments = createAsyncThunk('spaceProject/loadDocuments', async ({ spaceId, projectId }, { rejectWithValue }) => {
   try { return await fetchDocuments(spaceId, projectId); } catch (e) { return rejectWithValue('Failed to load documents'); }
@@ -61,9 +73,9 @@ const slice = createSlice({
     selectProject(state, a) { state.selectedProjectId = a.payload; },
   },
   extraReducers: (b) => {
-    b.addCase(loadSpaces.fulfilled, (s, a) => { s.spaces = a.payload; })
+    b.addCase(loadSpaces.fulfilled, (s, a) => { s.spaces = pageItems(a.payload); })
       .addCase(addSpace.fulfilled, (s, a) => { s.spaces.unshift(a.payload); })
-      .addCase(loadProjects.fulfilled, (s, a) => { s.projectsBySpace[a.payload.spaceId] = a.payload.data; })
+      .addCase(loadProjects.fulfilled, (s, a) => { s.projectsBySpace[a.payload.spaceId] = pageItems(a.payload.data); })
       .addCase(addProject.fulfilled, (s, a) => {
         const sid = a.payload.space_id;
         if (!s.projectsBySpace[sid]) s.projectsBySpace[sid] = [];
@@ -85,7 +97,7 @@ const slice = createSlice({
         s.projectsBySpace[sid] = (s.projectsBySpace[sid] || []).filter((p) => p.id !== a.payload.projectId);
       })
       .addCase(uploadDocument.fulfilled, (s, a) => { s.documents.unshift(a.payload); })
-      .addCase(loadDocuments.fulfilled, (s, a) => { s.documents = a.payload; })
+      .addCase(loadDocuments.fulfilled, (s, a) => { s.documents = pageItems(a.payload); })
       .addCase(retryDocument.fulfilled, (s, a) => {
         s.documents = s.documents.map((d) => (d.id === a.payload.id ? a.payload : d));
       })

@@ -143,6 +143,16 @@ def grade_assignment_submission(state: dict) -> dict:
         # Mastery moves only via quizzes and the AI tutor.
         assignment.status = "submitted"
         db.commit()
+        from app.services.event_service import emit_event, owner_of_project, ASSESSMENT_COMPLETED
+
+        emit_event(
+            db,
+            type=ASSESSMENT_COMPLETED,
+            user_id=owner_of_project(db, pid),
+            project_id=pid,
+            text=f"Assignment '{assignment.title}' submitted",
+            event_key=f"assignment:{assignment.id}",
+        )
         logger.success(f"[assignment.grade] assignment={assignment_id} score={score}/{total}")
         return {"score": float(score), "total": total, "error": ""}
     except Exception as e:

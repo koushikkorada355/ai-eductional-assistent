@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
-from typing import List
 from uuid import UUID
 from loguru import logger
 
@@ -10,6 +9,8 @@ from app.schemas.project import ProjectCreate, ProjectUpdate, ProjectOut
 from app.api.deps import get_current_user, get_owned_space, get_owned_project
 from app.db.models.user import User
 from app.db.models.space import Space
+from app.services.event_service import emit_event, PROJECT_CREATED
+from app.utils.pagination import MAX_PAGE_SIZE, PageOut, paginate_query, page_envelope
 
 router = APIRouter()
 
@@ -39,14 +40,19 @@ def create_project(
     db.add(project)
     db.commit()
     db.refresh(project)
+    emit_event(db, type=PROJECT_CREATED, user_id=current_user.id, project_id=project.id,
+               text=f"Project '{project.name}' created",
+               event_key=f"project:{project.id}")
     logger.success(f"Project {project.id} created in space {space_id}")
     return project
 
-@router.get("/", response_model=List[ProjectOut])
+@router.get("/", response_model=PageOut)
 def list_projects(
     space_id: UUID,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
 ):
     space = db.query(Space).filter(Space.id == space_id).first()
     if not space:
@@ -55,8 +61,11 @@ def list_projects(
     if space.user_id != current_user.id:
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Not authorized")
-    projects = db.query(Project).filter(Project.space_id == space_id).order_by(Project.created_at.desc()).all()
-    return projects
+    projects, total, page, page_size = paginate_query(
+        db.query(Project).filter(Project.space_id == space_id).order_by(Project.created_at.desc()),
+        page, page_size,
+    )
+    return page_envelope([ProjectOut.model_validate(p) for p in projects], total, page, page_size)
 
 @router.get("/{project_id}", response_model=ProjectOut)
 def get_project(

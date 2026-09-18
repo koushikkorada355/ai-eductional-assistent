@@ -1,8 +1,9 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import api from '../../api/client.js';
+import { pageItems, pageMeta } from '../../utils/paging.js';
 
 // API functions
-const fetchAssignments = (spaceId, projectId) => api.get(`/spaces/${spaceId}/projects/${projectId}/assignments`).then((r) => r.data);
+const fetchAssignments = (spaceId, projectId, params) => api.get(`/spaces/${spaceId}/projects/${projectId}/assignments`, { params: params || {} }).then((r) => r.data);
 const createAssignment = (spaceId, projectId, data) => api.post(`/spaces/${spaceId}/projects/${projectId}/assignments`, data).then((r) => r.data);
 const getAssignment = (spaceId, projectId, assignmentId) => api.get(`/spaces/${spaceId}/projects/${projectId}/assignments/${assignmentId}`).then((r) => r.data);
 const submitAssignment = (spaceId, projectId, assignmentId, data) => api.post(`/spaces/${spaceId}/projects/${projectId}/assignments/${assignmentId}/submit`, data).then((r) => r.data);
@@ -10,8 +11,8 @@ const submitAssignment = (spaceId, projectId, assignmentId, data) => api.post(`/
 const serverMessage = (e, fallback) => e?.response?.data?.detail || fallback;
 
 // Async thunks
-export const loadAssignments = createAsyncThunk('assignments/loadAssignments', async ({ spaceId, projectId }, { rejectWithValue }) => {
-  try { return await fetchAssignments(spaceId, projectId); } catch (e) { return rejectWithValue(serverMessage(e, 'Failed to load assignments')); }
+export const loadAssignments = createAsyncThunk('assignments/loadAssignments', async ({ spaceId, projectId, page, pageSize }, { rejectWithValue }) => {
+  try { return await fetchAssignments(spaceId, projectId, { page: page || 1, page_size: pageSize || 10 }); } catch (e) { return rejectWithValue(serverMessage(e, 'Failed to load assignments')); }
 });
 
 export const createAssignmentThunk = createAsyncThunk('assignments/createAssignment', async ({ spaceId, projectId, conceptIds, numQuestions, title }, { rejectWithValue }) => {
@@ -36,6 +37,8 @@ const slice = createSlice({
   name: 'assignments',
   initialState: {
     assignments: [],
+    assignmentsMeta: { total: 0, page: 1, pageSize: 10, pages: 0 },
+    assignmentsSummary: null,
     selectedAssignment: null,
     status: 'idle',
     error: null,
@@ -46,7 +49,7 @@ const slice = createSlice({
   },
   extraReducers: (builder) => {
     builder
-      .addCase(loadAssignments.fulfilled, (state, action) => { state.assignments = action.payload; state.error = null; })
+      .addCase(loadAssignments.fulfilled, (state, action) => { state.assignments = pageItems(action.payload); state.assignmentsMeta = pageMeta(action.payload); state.assignmentsSummary = action.payload?.summary || null; state.error = null; })
       .addCase(createAssignmentThunk.pending, (state) => { state.status = 'loading'; state.error = null; })
       .addCase(createAssignmentThunk.fulfilled, (state, action) => {
         state.assignments.unshift({

@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import api from '../../api/client.js';
+import { pageItems, pageMeta } from '../../utils/paging.js';
 
 const serverMessage = (e, fallback) => e?.response?.data?.detail || fallback;
 
@@ -21,13 +22,13 @@ export const loadAdminOverview = createAsyncThunk('analytics/loadAdminOverview',
   catch (e) { return rejectWithValue(serverMessage(e, 'Failed to load admin overview')); }
 });
 
-export const loadAdminUsers = createAsyncThunk('analytics/loadAdminUsers', async (_, { rejectWithValue }) => {
-  try { return (await api.get('/admin/users')).data; }
+export const loadAdminUsers = createAsyncThunk('analytics/loadAdminUsers', async (params, { rejectWithValue }) => {
+  try { return (await api.get('/admin/users', { params: params || {} })).data; }
   catch (e) { return rejectWithValue(serverMessage(e, 'Failed to load users')); }
 });
 
-export const loadAdminJobs = createAsyncThunk('analytics/loadAdminJobs', async (_, { rejectWithValue }) => {
-  try { return (await api.get('/admin/jobs')).data; }
+export const loadAdminJobs = createAsyncThunk('analytics/loadAdminJobs', async (params, { rejectWithValue }) => {
+  try { return (await api.get('/admin/jobs', { params: params || {} })).data; }
   catch (e) { return rejectWithValue(serverMessage(e, 'Failed to load jobs')); }
 });
 
@@ -46,13 +47,13 @@ export const loadAdminUserDetail = createAsyncThunk('analytics/loadAdminUserDeta
   catch (e) { return rejectWithValue(serverMessage(e, 'Failed to load user detail')); }
 });
 
-export const loadAdminSpaces = createAsyncThunk('analytics/loadAdminSpaces', async (_, { rejectWithValue }) => {
-  try { return (await api.get('/admin/spaces')).data; }
+export const loadAdminSpaces = createAsyncThunk('analytics/loadAdminSpaces', async (params, { rejectWithValue }) => {
+  try { return (await api.get('/admin/spaces', { params: params || {} })).data; }
   catch (e) { return rejectWithValue(serverMessage(e, 'Failed to load spaces')); }
 });
 
-export const loadAdminProjects = createAsyncThunk('analytics/loadAdminProjects', async (_, { rejectWithValue }) => {
-  try { return (await api.get('/admin/projects')).data; }
+export const loadAdminProjects = createAsyncThunk('analytics/loadAdminProjects', async (params, { rejectWithValue }) => {
+  try { return (await api.get('/admin/projects', { params: params || {} })).data; }
   catch (e) { return rejectWithValue(serverMessage(e, 'Failed to load projects')); }
 });
 
@@ -76,9 +77,13 @@ const slice = createSlice({
   initialState: {
     overview: null,
     project: null,
-    admin: {
-      overview: null, users: [], userDetail: null, spaces: [], projects: [],
-      activity: null, learning: null, jobs: [], jobSummary: null,
+      admin: {
+      overview: null, users: [], usersMeta: { total: 0, page: 1, pageSize: 15, pages: 0 },
+      userDetail: null,
+      spaces: [], spacesMeta: { total: 0, page: 1, pageSize: 15, pages: 0 },
+      projects: [], projectsMeta: { total: 0, page: 1, pageSize: 15, pages: 0 },
+      activity: null, learning: null,
+      jobs: [], jobsMeta: { total: 0, page: 1, pageSize: 20, pages: 0 }, jobSummary: null,
       evaluations: null, usage: null, health: null,
     },
     status: 'idle',
@@ -95,15 +100,16 @@ const slice = createSlice({
       .addCase(loadProjectAnalytics.fulfilled, (s, a) => { s.project = a.payload; s.status = 'idle'; })
       .addCase(loadProjectAnalytics.rejected, (s, a) => { s.status = 'idle'; s.error = a.payload; })
       .addCase(loadAdminOverview.fulfilled, (s, a) => { s.admin.overview = a.payload; })
-      .addCase(loadAdminUsers.fulfilled, (s, a) => { s.admin.users = a.payload || []; })
+      .addCase(loadAdminUsers.fulfilled, (s, a) => { s.admin.users = pageItems(a.payload); s.admin.usersMeta = pageMeta(a.payload); })
       .addCase(loadAdminUserDetail.fulfilled, (s, a) => { s.admin.userDetail = a.payload; })
-      .addCase(loadAdminSpaces.fulfilled, (s, a) => { s.admin.spaces = a.payload || []; })
-      .addCase(loadAdminProjects.fulfilled, (s, a) => { s.admin.projects = a.payload || []; })
+      .addCase(loadAdminSpaces.fulfilled, (s, a) => { s.admin.spaces = pageItems(a.payload); s.admin.spacesMeta = pageMeta(a.payload); })
+      .addCase(loadAdminProjects.fulfilled, (s, a) => { s.admin.projects = pageItems(a.payload); s.admin.projectsMeta = pageMeta(a.payload); })
       .addCase(loadAdminActivity.fulfilled, (s, a) => { s.admin.activity = a.payload; })
       .addCase(loadAdminLearning.fulfilled, (s, a) => { s.admin.learning = a.payload; })
       .addCase(loadAdminHealth.fulfilled, (s, a) => { s.admin.health = a.payload; })
       .addCase(loadAdminJobs.fulfilled, (s, a) => {
-        s.admin.jobs = a.payload?.items || a.payload || [];
+        s.admin.jobs = a.payload?.items || (Array.isArray(a.payload) ? a.payload : []);
+        s.admin.jobsMeta = pageMeta(a.payload?.items ? a.payload : []);
         s.admin.jobSummary = a.payload?.summary || null;
       })
       .addCase(loadAdminEvaluations.fulfilled, (s, a) => { s.admin.evaluations = a.payload; })

@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from typing import List, Optional, Any
+from typing import Optional, Any
 from uuid import UUID
 from loguru import logger
 
@@ -10,7 +10,9 @@ from app.api.deps import get_owned_project
 from app.db.models.project import Project
 from app.db.models.assessment import Concept, Quiz, QuizQuestion
 from app.schemas.quiz import ConceptOut, QuizQuestionOut
+from app.utils.pagination import MAX_PAGE_SIZE, PageOut, paginate_query, page_envelope
 from app.ai.graphs.quiz_graph import quiz_app
+from app.db.checkpointer import robust_ainvoke
 from app.ai.nodes import evaluate_answer, update_mastery, MAX_QUESTIONS
 
 router = APIRouter()
@@ -70,7 +72,8 @@ async def start_quiz(
 
     config = {"configurable": {"thread_id": str(quiz.id)}}
     try:
-        result = await quiz_app.ainvoke(
+        result = await robust_ainvoke(
+            quiz_app,
             {
                 "project_id": str(project.id),
                 "quiz_id": str(quiz.id),
@@ -149,7 +152,8 @@ async def submit_answer(
     # 2. Next question via graph (same thread_id so checkpointer persists)
     config = {"configurable": {"thread_id": str(quiz.id)}}
     try:
-        result = await quiz_app.ainvoke(
+        result = await robust_ainvoke(
+            quiz_app,
             {
                 "project_id": str(project.id),
                 "quiz_id": str(quiz.id),
@@ -179,14 +183,17 @@ async def submit_answer(
     return {"evaluation": evaluation, "next_question": nxt, "questions_answered": answered, "done": False}
 
 
-@router.get("/{project_id}/mastery", response_model=List[ConceptOut])
+@router.get("/{project_id}/mastery", response_model=PageOut)
 def get_mastery(
     project: Project = Depends(get_owned_project),
     db: Session = Depends(get_db),
+    page: int = Query(default=1, ge=1, description="1-based page number"),
+    page_size: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE, description="Rows per page"),
 ):
-    return (
+    rows, total, page, page_size = paginate_query(
         db.query(Concept)
         .filter(Concept.project_id == project.id)
-        .order_by(Concept.mastery_level.asc())
-        .all()
+        .order_by(Concept.mastery_level.asc()),
+        page, page_size,
     )
+    return page_envelope([ConceptOut.model_validate(c) for c in rows], total, page, page_size)

@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import api from '../../api/client.js';
+import { pageItems } from '../../utils/paging.js';
 
 const fetchConcepts = (spaceId, projectId) =>
   api.get(`/spaces/${spaceId}/projects/${projectId}/concepts`).then((r) => r.data);
@@ -32,7 +33,7 @@ const slice = createSlice({
         state.error = null;
       })
       .addCase(loadConcepts.fulfilled, (state, action) => {
-        state.concepts = action.payload || [];
+        state.concepts = pageItems(action.payload);
         state.status = 'idle';
         state.error = null;
       })

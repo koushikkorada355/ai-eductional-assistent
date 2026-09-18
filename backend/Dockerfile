@@ -3,7 +3,11 @@ FROM python:3.11-slim
 WORKDIR /code
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# tesseract-ocr binary: required by pytesseract for the scanned-image OCR
+# fallback in app/utils/pdf_parser.py. English only keeps the image small.
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 

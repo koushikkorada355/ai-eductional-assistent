@@ -7,6 +7,7 @@ from app.db.models.user import User
 from app.schemas.user import UserCreate, UserOut, Token, UserLogin
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.config import settings
+from app.services.event_service import emit_event, USER_REGISTERED
 
 from app.api.deps import get_current_user
 
@@ -32,6 +33,9 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+    emit_event(db, type=USER_REGISTERED, user_id=new_user.id,
+               text=f"{new_user.email} joined",
+               event_key=f"user:{new_user.id}")
     
     logger.success(f"User registered successfully: {new_user.email}")
     return new_user
