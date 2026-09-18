@@ -23,13 +23,22 @@ INTENT_KNOWLEDGE = "knowledge"
 def _get_suggest_llm():
     """Low-temperature LLM for focused, deterministic follow-up questions."""
     try:
-        from langchain_groq import ChatGroq
+        from langchain_openai import ChatOpenAI
         from app.config import settings
-        if settings.GROQ_API_KEY:
-            return ChatGroq(
-                model=settings.GROQ_MODEL, temperature=0.2,
-                groq_api_key=settings.GROQ_API_KEY,
-            )
+        from app.services.ai_usage_service import TrackedLLM
+        if settings.INCEPTION_API_KEY:
+            return TrackedLLM(ChatOpenAI(
+                model=settings.INCEPTION_MODEL or "mercury-2.5", temperature=0.2,
+                api_key=settings.INCEPTION_API_KEY,
+                base_url=settings.INCEPTION_BASE_URL or "https://api.inceptionlabs.ai/v1",
+            ))
+        # Groq fallback (disabled 2026-09-18, kept for easy switch-back):
+        # from langchain_groq import ChatGroq
+        # if settings.GROQ_API_KEY:
+        #     return TrackedLLM(ChatGroq(
+        #         model=settings.GROQ_MODEL, temperature=0.2,
+        #         groq_api_key=settings.GROQ_API_KEY,
+        #     ))
     except Exception as e:
         logger.warning(f"[tutor.suggest] low-temp llm fallback: {e}")
     return get_llm()
@@ -198,6 +207,16 @@ async def _suggest_followups(
 
 async def detect_intent(state: dict) -> dict:
     logger.info(f"[tutor.intent] project_id={state.get('project_id', '?')} entry")
+    # Quick actions carry placeholder user text ("Generating…") with no
+    # topic — the classifier would read small-talk and misroute them to
+    # general_chat, skipping their directives. Go knowledge directly.
+    try:
+        from app.ai.actions import VALID_ACTIONS as _VA
+        if (state.get("action_id") or "") in _VA:
+            logger.info("[tutor.intent] intent=knowledge (quick action, classifier skipped)")
+            return {"intent": INTENT_KNOWLEDGE}
+    except Exception:
+        pass
     question = state.get("user_question", "")
     # Identity / personal-memory questions are conversational, not document
     # lookups — route them to the general path so they are never rejected
@@ -317,12 +336,25 @@ async def general_chat(state: dict) -> dict:
 def retrieve_context(state: dict) -> dict:
     # RAG pipeline: Gemini query embedding -> pgvector cosine search,
     # top-5 chunks strictly filtered by project_id.
+    # Quick actions carry placeholder user text ("Generating…") with no
+    # topic — retrieve on the most recent real human turn instead so the
+    # turn grounds in what was actually discussed.
+    query = state["user_question"]
+    try:
+        from app.ai.actions import VALID_ACTIONS as _VQ
+        if (state.get("action_id") or "") in _VQ:
+            human = [m.content.strip() for m in (state.get("messages") or [])
+                     if getattr(m, "type", "") == "human" and (m.content or "").strip()]
+            if human:
+                query = human[-1][:500]
+    except Exception:
+        pass
     embeddings = GoogleGenerativeAIEmbeddings(
         model="gemini-embedding-001",
         google_api_key=settings.GOOGLE_API_KEY,
         output_dimensionality=768,
     )
-    query_vector = embeddings.embed_query(state["user_question"])
+    query_vector = embeddings.embed_query(query)
     db = SessionLocal()
     try:
         rows = (
@@ -362,19 +394,26 @@ def retrieve_context(state: dict) -> dict:
 
 
 async def grade_documents(state: dict) -> dict:
-    llm = get_llm()
-    res = await llm.ainvoke(
-        [
-            SystemMessage(
-                content="You evaluate whether the provided Context is sufficient to answer the user's question. "
-                "Output ONLY the word 'yes' or the word 'no'. No other text."
-            ),
-            HumanMessage(
-                content=f"Question: {state['user_question']}\n\nContext:\n"
-                + "\n".join(state.get("retrieved_context", []))
-            ),
-        ]
-    )
+    # Fail open on provider errors: generate_answer's own prompt still
+    # refuses when context is truly insufficient, so a grader outage
+    # degrades to "try to answer" instead of a 500.
+    try:
+        llm = get_llm()
+        res = await llm.ainvoke(
+            [
+                SystemMessage(
+                    content="You evaluate whether the provided Context is sufficient to answer the user's question. "
+                    "Output ONLY the word 'yes' or the word 'no'. No other text."
+                ),
+                HumanMessage(
+                    content=f"Question: {state['user_question']}\n\nContext:\n"
+                    + "\n".join(state.get("retrieved_context", []))
+                ),
+            ]
+        )
+    except Exception as e:
+        logger.warning(f"[tutor.grade] grader failed, failing open: {e}")
+        return {"sufficient_evidence": True}
     return {"sufficient_evidence": res.content.strip().lower() == "yes"}
 
 
@@ -385,9 +424,11 @@ def reject_answer(state: dict) -> dict:
 
 
 def retrieve_learning_context(state: dict) -> dict:
-    """Fast, sync, failure-safe: conversation summary + relevant learner
-    memory + relevant assessment stats. Never raises — on any failure the
-    tutor proceeds with RAG + recent messages only."""
+    """Fast, sync, failure-safe: conversation summary + freshest learner
+    memory + recent assessment stats. Memory is loaded by recency, never
+    filtered by the current question — no question-matching here. Never
+    raises — on any failure the tutor proceeds with RAG + recent messages
+    only."""
     empty = {"conversation_summary": "", "relevant_learning_context": [],
              "relevant_assessment_context": "", "user_name": state.get("user_name") or ""}
     try:
@@ -399,7 +440,7 @@ def retrieve_learning_context(state: dict) -> dict:
         from app.db.models.mastery import QuizHistory
         from app.services.learning_service import (
             ALWAYS_TYPE_CAP, ALWAYS_TYPES, RECENT_MESSAGE_COUNT,
-            concept_matches, extract_user_name, format_assessment, get_summary,
+            extract_user_name, format_assessment, get_summary,
             render_memory_lines, user_name_from_rows, upsert_memory,
         )
 
@@ -457,7 +498,6 @@ def retrieve_learning_context(state: dict) -> dict:
 
             concepts = db.query(Concept).filter(Concept.project_id == project_id).all()
             concept_names = {c.id: c.name for c in concepts}
-            matched_ids = {c.id for c in concepts if concept_matches(question, c.name)}
 
             rows = (
                 db.query(LearningContext)
@@ -468,40 +508,38 @@ def retrieve_learning_context(state: dict) -> dict:
                 .all()
             )
             user_name = user_name_from_rows(rows) or extract_user_name(question) or ""
+            # No question-based filtering: always-on profile rows first, then
+            # the freshest remaining rows, bounded so prompts stay small.
             selected = [r for r in rows if r.type in ALWAYS_TYPES][: ALWAYS_TYPE_CAP * 2]
             for r in rows:
                 if r in selected or len(selected) >= ALWAYS_TYPE_CAP * 2 + 4:
                     continue
-                if r.concept_id and r.concept_id in matched_ids:
-                    selected.append(r)
-                elif r.concept_id is None and r.type in ("weakness", "repeated_mistake"):
-                    words = {w for w in r.content.lower().split() if len(w) >= 5}
-                    if len(words & {w for w in question.lower().split() if len(w) >= 5}) >= 2:
-                        selected.append(r)
+                selected.append(r)
             memory_text = render_memory_lines(selected, concept_names)
 
+            # Recent assessment stats across all concepts (no question match).
             assessment_text = ""
-            if matched_ids:
-                hist = (
-                    db.query(QuizHistory)
-                    .filter(QuizHistory.user_id == user_id,
-                            QuizHistory.concept_id.in_(matched_ids))
-                    .order_by(QuizHistory.created_at.desc())
-                    .limit(60)
-                    .all()
-                )
-                by_concept = {}
-                for h in hist:
-                    by_concept.setdefault(h.concept_id, []).append(h)
-                stats = []
-                for cid, items in by_concept.items():
-                    recent = items[:10]
-                    correct = sum(1 for i in recent if i.is_correct)
-                    mistake = next((i.evaluator_feedback for i in recent if not i.is_correct and i.evaluator_feedback), None)
-                    stats.append({"concept": concept_names.get(cid, "Unknown"),
-                                  "correct": correct, "total": len(recent),
-                                  "last_mistake": mistake})
-                assessment_text = format_assessment(stats)
+            hist = (
+                db.query(QuizHistory)
+                .filter(QuizHistory.user_id == user_id)
+                .order_by(QuizHistory.created_at.desc())
+                .limit(60)
+                .all()
+            )
+            by_concept = {}
+            for h in hist:
+                if h.concept_id is None:
+                    continue
+                by_concept.setdefault(h.concept_id, []).append(h)
+            stats = []
+            for cid, items in list(by_concept.items())[:6]:
+                recent = items[:10]
+                correct = sum(1 for i in recent if i.is_correct)
+                mistake = next((i.evaluator_feedback for i in recent if not i.is_correct and i.evaluator_feedback), None)
+                stats.append({"concept": concept_names.get(cid, "Unknown"),
+                              "correct": correct, "total": len(recent),
+                              "last_mistake": mistake})
+            assessment_text = format_assessment(stats)
             return {
                 "conversation_summary": summary or "",
                 "relevant_learning_context": memory_text.split("\n") if memory_text else [],
@@ -513,6 +551,57 @@ def retrieve_learning_context(state: dict) -> dict:
     except Exception as e:
         logger.warning(f"[tutor.memory] retrieval failed, continuing without: {e}")
         return empty
+
+
+# In-window history compression: bounded verbatim tail + high-priority
+# bullets for the rest. Keeps answer prompts small on long threads.
+HISTORY_VERBATIM_TAIL = 6
+HISTORY_CHAR_BUDGET = 6000
+
+
+async def compress_history(state: dict) -> dict:
+    """Distill older in-window assistant turns to high-priority bullets.
+
+    Only the most recent HISTORY_VERBATIM_TAIL messages travel verbatim to
+    the answer prompt; older ASSISTANT turns are compressed to the important
+    points (key definitions, conclusions, facts, open threads). User
+    questions are never included — no questions in, no questions out.
+    Greetings, small-talk, repetition, and drill placeholder bubbles
+    ("Generating…") are dropped. No LLM call when the window already fits
+    the budget — this node is nearly free on short threads.
+    """
+    try:
+        msgs = list(state.get("messages") or [])
+        if len(msgs) <= HISTORY_VERBATIM_TAIL:
+            if sum(len(m.content or "") for m in msgs) <= HISTORY_CHAR_BUDGET:
+                return {"history_summary": ""}
+        older = msgs[:-HISTORY_VERBATIM_TAIL] if len(msgs) > HISTORY_VERBATIM_TAIL else msgs
+        older = [m for m in older if getattr(m, "type", "") != "human"]
+        older_txt = "\n".join(
+            f"{getattr(m, 'type', 'msg')}: {(m.content or '')[:800]}" for m in older
+        ).strip()
+        if not older_txt:
+            return {"history_summary": ""}
+        llm = get_llm()
+        res = await llm.ainvoke(
+            [
+                SystemMessage(
+                    content="Compress these assistant answers into 3-6 bullets covering "
+                    "ONLY high-priority content about the study materials: key "
+                    "definitions, conclusions, facts, and open threads. Do not "
+                    "include user questions — answers only. Drop anything "
+                    "off-topic or unrelated, "
+                    "greetings, small-talk, repetition, status/placeholder messages "
+                    "(e.g. 'Generating…'), and failed turns. Output ONLY the "
+                    "bullets, no intro or outro."
+                ),
+                HumanMessage(content=older_txt[:8000]),
+            ]
+        )
+        return {"history_summary": (res.content or "").strip()[:2000]}
+    except Exception as e:
+        logger.warning(f"[tutor.compress] skipped: {e}")
+        return {"history_summary": ""}
 
 
 async def generate_answer(state: dict) -> dict:
@@ -536,42 +625,84 @@ async def generate_answer(state: dict) -> dict:
     llm = get_llm()
     context = "\n".join(state.get("retrieved_context", []))
 
-    # Silent mastery signal: does the user demonstrate understanding?
-    try:
-        history_txt = "\n".join(
-            f"{m.type}: {m.content[:500]}" for m in (state.get("messages") or [])[-6:]
-        )
-        sig_res = await llm.ainvoke(
-            [
-                SystemMessage(
-                    content="Does the user demonstrate understanding of any core concepts in this interaction? "
-                    "If yes, output ONLY JSON like {\"concept_name\": \"X\", \"confidence_score\": 80}. "
-                    "If no, output null. No other text."
-                ),
-                HumanMessage(
-                    content=f"Question: {state.get('user_question')}\nContext:\n{context[:3000]}\nHistory:\n{history_txt}"
-                ),
-            ]
-        )
-        raw = sig_res.content.strip().replace("```json", "").replace("```", "").strip()
-        if raw and raw.lower() != "null" and raw.lower() != "none":
-            try:
-                signal = ChatMasterySignal(**json.loads(raw))
-                from app.tasks.concept_tasks import update_mastery_from_chat_task
+    # Practice turns are chat-only drills: they must never move mastery.
+    from app.ai.actions import PRACTICE as _PRACTICE_ACTION
+    practice_turn = (state.get("action_id") or "") == _PRACTICE_ACTION
 
-                update_mastery_from_chat_task.delay(
-                    str(project_id), signal.concept_name, float(signal.confidence_score)
-                )
-                logger.info(f"[tutor.generate] mastery signal project={project_id} concept={signal.concept_name}")
-            except Exception as pe:
-                logger.warning(f"[tutor.generate] mastery parse/dispatch skipped: {pe}")
-    except Exception as e:
-        logger.warning(f"[tutor.generate] silent eval failed project={project_id}: {e}")
+    # Silent mastery signal: does the user demonstrate understanding?
+    # Skipped entirely for practice turns (see above).
+    if not practice_turn:
+        try:
+            history_txt = "\n".join(
+                f"{m.type}: {m.content[:500]}" for m in (state.get("messages") or [])[-6:]
+            )
+            sig_res = await llm.ainvoke(
+                [
+                    SystemMessage(
+                        content="Does the user demonstrate understanding of any core concepts in this interaction? "
+                        "If yes, output ONLY JSON like {\"concept_name\": \"X\", \"confidence_score\": 80}. "
+                        "If no, output null. No other text."
+                    ),
+                    HumanMessage(
+                        content=f"Question: {state.get('user_question')}\nContext:\n{context[:3000]}\nHistory:\n{history_txt}"
+                    ),
+                ]
+            )
+            raw = sig_res.content.strip().replace("```json", "").replace("```", "").strip()
+            if raw and raw.lower() != "null" and raw.lower() != "none":
+                try:
+                    signal = ChatMasterySignal(**json.loads(raw))
+                    from app.tasks.concept_tasks import update_mastery_from_chat_task
+
+                    update_mastery_from_chat_task.delay(
+                        str(project_id), signal.concept_name, float(signal.confidence_score)
+                    )
+                    logger.info(f"[tutor.generate] mastery signal project={project_id} concept={signal.concept_name}")
+                except Exception as pe:
+                    logger.warning(f"[tutor.generate] mastery parse/dispatch skipped: {pe}")
+        except Exception as e:
+            logger.warning(f"[tutor.generate] silent eval failed project={project_id}: {e}")
+    else:
+        logger.info(f"[tutor.generate] practice turn — mastery signal skipped project={project_id}")
 
     summary = state.get("conversation_summary") or ""
     memory_lines = state.get("relevant_learning_context") or []
     assessment = state.get("relevant_assessment_context") or ""
-    history_msgs = list(state.get("messages") or [])[-RECENT_MESSAGE_COUNT:]
+    # Bounded verbatim tail — older turns arrive via history_summary
+    # (compress_history node), so long threads stay cheap.
+    history_msgs = list(state.get("messages") or [])[-HISTORY_VERBATIM_TAIL:]
+    if practice_turn:
+        # Practice drills must never quiz greetings, placeholders, or
+        # off-topic turns: keep only material-related human questions.
+        # Assistant answers always stay (they carry the study content).
+        from app.services.learning_service import (
+            concept_matches, concept_vocabulary, is_noise_message,
+            significant_words,
+        )
+        try:
+            import uuid as _uuid2
+            from app.db.models.assessment import Concept as _Concept
+            _db = SessionLocal()
+            try:
+                _names = [c.name for c in _db.query(_Concept).filter(
+                    _Concept.project_id == _uuid2.UUID(str(project_id))).all()]
+            finally:
+                _db.close()
+        except Exception:
+            _names = []
+        _vocab = concept_vocabulary(_names)
+
+        def _material_question(text):
+            t = (text or "").strip()
+            if not t or is_noise_message(t):
+                return False
+            if any(concept_matches(t, n) for n in _names):
+                return True
+            return len(significant_words(t) & _vocab) >= 1
+
+        history_msgs = [m for m in history_msgs
+                        if getattr(m, "type", "") != "human" or _material_question(m.content or "")]
+    compressed_history = (state.get("history_summary") or "").strip()
     user_name = (state.get("user_name") or "").strip()
     identity_line = (
         f"The user's name is {user_name}. Use it naturally when relevant "
@@ -605,12 +736,14 @@ async def generate_answer(state: dict) -> dict:
         "document evidence, and never mention memory internals."
         f"\n\nUser identity:\n{identity_line}"
         f"\n\nConversation summary (older context):\n{summary or 'None yet.'}"
+        f"\n\nCompressed recent history (high-priority points only):\n{compressed_history or 'None.'}"
         f"\n\nPersistent learner context:\n{chr(10).join(memory_lines) if memory_lines else 'None.'}"
         f"\n\nRelevant assessment history:\n{assessment or 'None.'}"
         f"\n\nContext:\n{context}"
     )
-    # Quick-action shaping (explain / summarize / deep dive / flashcards):
-    # same RAG context, only the response directive changes.
+    # Quick-action shaping (summarize / deep dive / flashcards / practice):
+    # same RAG + conversation-memory pipeline, only the response directive
+    # changes (see app.ai.actions).
     action_hint = (state.get("action_hint") or "").strip()
     if action_hint:
         system_content += f"\n\nActive quick-action guidance:\n{action_hint}"

@@ -7,6 +7,7 @@ import json
 from loguru import logger
 from langchain_core.messages import HumanMessage, SystemMessage
 from app.ai.llm import get_llm
+from app.services.ai_usage_service import track_ai_call
 from app.schemas.mastery import (
     SelectorDecision,
     GeneratedQuestion,
@@ -101,6 +102,7 @@ def evaluate_open_answer(question_text: str, ideal_answer: str, user_answer: str
         raise
 
 
+@track_ai_call("recommendations")
 def recommend_next(mastery_state: list, recent_history: list) -> Recommendation:
     logger.info("[mastery_engine:recommender] generating recommendation")
     try:

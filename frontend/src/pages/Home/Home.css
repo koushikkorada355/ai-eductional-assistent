@@ -1,0 +1,348 @@
+/* Home dashboard — personal landing only (your spaces, projects, mastery).
+ * Global Analytics is a separate page and is intentionally not used here. */
+
+.home-wrap {
+  margin: 0 auto;
+  width: 100%;
+  max-width: 1240px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 32px 24px;
+}
+
+.home-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.home-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+/* Creative hero: deep gradient, glow ring, oversized CTA. */
+.home-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 26px 26px 24px;
+  color: #fff;
+  background:
+    radial-gradient(420px 200px at 88% 12%, rgba(255, 255, 255, 0.16), transparent 60%),
+    radial-gradient(560px 300px at 8% 110%, rgba(4, 120, 87, 0.55), transparent 62%),
+    linear-gradient(135deg, #1b1447 0%, #2b1f6e 55%, #4338ca 100%);
+  box-shadow: var(--shadow-sm);
+}
+
+.home-hero::after {
+  content: '';
+  position: absolute;
+  right: -70px;
+  top: -70px;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  border: 26px solid rgba(255, 255, 255, 0.10);
+  pointer-events: none;
+}
+
+.home-hero .home-eyebrow {
+  color: #c7d2fe;
+}
+
+.home-hero-title {
+  margin: 4px 0 6px;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+.home-hero .home-muted {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.home-hero-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.home-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 999px;
+  background: #fff;
+  color: #2b1f6e;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.home-cta:hover {
+  transform: translateY(-1px);
+}
+
+.home-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding: 20px 22px;
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+}
+
+.home-card-title {
+  margin: 4px 0 6px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--heading);
+}
+
+.home-eyebrow {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.home-muted {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.home-muted small,
+small.home-muted {
+  display: block;
+  font-size: 12px;
+}
+
+.home-link {
+  margin-top: 10px;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--primary);
+  cursor: pointer;
+}
+
+.home-link:hover {
+  text-decoration: underline;
+}
+
+.home-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.home-list li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.home-list li:last-child {
+  border-bottom: none;
+}
+
+.home-list strong {
+  display: block;
+  font-size: 13.5px;
+  color: var(--heading);
+}
+
+.home-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 2px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.home-row-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.home-row-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 150px;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--heading);
+}
+
+.home-attention {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.home-more-recs {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.home-more-recs p {
+  margin: 2px 0 0;
+}
+
+/* ---- learning loop stepper ---- */
+.home-loop {
+  overflow: hidden;
+}
+
+.home-loop-track {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-top: 14px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.home-loop-step {
+  display: flex;
+  align-items: center;
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+.home-loop-step:last-of-type {
+  flex: 0 0 auto;
+}
+
+.home-loop-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 86px;
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  cursor: default;
+}
+
+button.home-loop-node {
+  cursor: pointer;
+  border-radius: 10px;
+}
+
+button.home-loop-node:hover {
+  background: var(--bg);
+}
+
+.home-loop-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 800;
+  font-family: var(--font-display);
+}
+
+.home-loop-dot.done {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(67, 56, 202, 0.35);
+}
+
+.home-loop-dot.todo {
+  border: 2px dashed var(--border);
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.home-loop-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--body);
+  white-space: nowrap;
+}
+
+.home-loop-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.home-loop-connector {
+  flex: 1;
+  min-width: 14px;
+  height: 2px;
+  margin: 0 2px 34px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--primary) 0%, var(--border) 100%);
+  opacity: 0.7;
+}
+
+.home-loop-restart {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  width: 30px;
+  height: 30px;
+  margin-left: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid var(--primary);
+  color: var(--primary);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+@media (max-width: 1024px) {
+  .home-kpis {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .home-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .home-wrap {
+    padding: 20px 14px;
+  }
+  .home-row-progress {
+    width: 110px;
+  }
+}

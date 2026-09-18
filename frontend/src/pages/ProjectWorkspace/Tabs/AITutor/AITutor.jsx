@@ -18,7 +18,7 @@ import { IconChat, IconFile } from '../../../../components/icons/Icons.jsx';
 import ConversationSidebar from './ConversationSidebar.jsx';
 import ChatThread from './ChatThread.jsx';
 import SourcesPanel from './SourcesPanel.jsx';
-import QuickActions, { QUICK_ACTIONS, deriveActionTopic, shortTopic } from './QuickActions.jsx';
+import QuickActions, { QUICK_ACTIONS, deriveActionTopic, shortTopic, lastRealUserText, isGeneralMessage } from './QuickActions.jsx';
 import { startQuiz } from '../../../../features/quiz/quizSlice.js';
 import './AITutor.css';
 
@@ -227,6 +227,14 @@ export default function AITutor({ spaceId, projectId, conversationId, onSelectCo
     if (!def || sending) return;
     setActionError(null);
     const topic = deriveActionTopic(activeMessages);
+    // Never generate study material from greetings / small-talk — there is
+    // no topic to build on. Fresh conversations (no real question yet) are
+    // still allowed through via the fallback topic.
+    const realQ = lastRealUserText(activeMessages);
+    if (realQ && isGeneralMessage(realQ)) {
+      setActionError('Quick actions need a study topic — ask a question about your materials first.');
+      return;
+    }
     if (def.isQuiz) {
       const prompt = `Generate an adaptive quiz on: ${topic}`;
       setPendingAction(actionId);

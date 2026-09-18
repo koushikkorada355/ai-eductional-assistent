@@ -20,6 +20,13 @@ class TutorState(TypedDict):
     # Quick-action directive (see app.ai.actions): prompt-shaping hint for
     # generate_answer only. Retrieval always runs on user_question.
     action_hint: str
+    # Raw quick-action id (e.g. "practice") so nodes can branch on behaviour
+    # — practice turns must never emit mastery signals. Empty when none.
+    action_id: str
+    # Rolling compression of older in-window turns (high-priority bullets
+    # only), written by the compress_history node to keep prompts small on
+    # long threads. Empty when the window already fits the budget.
+    history_summary: str
     # Persistent learning context (never overrides document evidence).
     conversation_summary: str
     relevant_learning_context: List[str]

@@ -7,3 +7,4 @@ from app.db.models.document import Document, DocumentChunk  # noqa: F401
 from app.db.models.assessment import Concept, Quiz, QuizQuestion, Assignment, AssignmentQuestion, AssignmentSubmission  # noqa: F401
 from app.db.models.mastery import UserConceptMastery, QuizHistory, MasteryHistory  # noqa: F401
 from app.db.models.learning import LearningContext, ConversationSummary  # noqa: F401
+from app.db.models.ai_usage import AIUsage  # noqa: F401

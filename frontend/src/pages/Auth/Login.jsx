@@ -34,7 +34,7 @@ export default function Login() {
     setTouched({ email: true, password: true });
     if (invalid || loading) return;
     const r = await dispatch(login({ email: email.trim(), password }));
-    if (r.meta.requestStatus === 'fulfilled') navigate('/spaces', { replace: true });
+    if (r.meta.requestStatus === 'fulfilled') navigate('/', { replace: true });
   };
 
   return (

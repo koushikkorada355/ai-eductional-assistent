@@ -68,6 +68,13 @@ async def lifespan(app: FastAPI):
                 conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS suggested_questions JSONB"))
                 # Auth redesign: display name collected at registration.
                 conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(120)"))
+                # AI usage metering: tokens / cost / provider per operation.
+                conn.execute(text("ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS provider VARCHAR"))
+                conn.execute(text("ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS prompt_tokens INTEGER DEFAULT 0"))
+                conn.execute(text("ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS completion_tokens INTEGER DEFAULT 0"))
+                conn.execute(text("ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS total_tokens INTEGER DEFAULT 0"))
+                conn.execute(text("ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS cost_usd FLOAT DEFAULT 0"))
+                conn.execute(text("ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS calls INTEGER DEFAULT 1"))
                 conn.commit()
             logger.success("Database connected and tables created.")
             break
@@ -82,6 +89,16 @@ async def lifespan(app: FastAPI):
         await setup_checkpointer()
     except Exception:
         pass
+    try:
+        from app.db.session import SessionLocal
+        from app.core.admin_seed import ensure_admin_seed
+        db = SessionLocal()
+        try:
+            ensure_admin_seed(db)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Admin seed skipped: {e}")
     yield
     logger.info("Shutting down backend...")
 

@@ -238,12 +238,13 @@ const slice = createSlice({
         s.sendingById[a.meta.arg.conversationId] = true;
       })
       .addCase(sendQuestion.fulfilled, (s, a) => {
-        const { conversationId, answer, citations, flashcards, question, conversation_title, suggested_questions } = a.payload;
+        const { conversationId, answer, citations, flashcards, mcq, question, conversation_title, suggested_questions } = a.payload;
         s.sendingById[conversationId] = false;
         if (!s.messagesById[conversationId]) s.messagesById[conversationId] = [];
         s.messagesById[conversationId].push({
           role: 'assistant', content: answer, citations: normalizeCitations(citations),
           flashcards: Array.isArray(flashcards) ? flashcards : [],
+          mcq: Array.isArray(mcq) ? mcq : [],
           suggested_questions: normalizeSuggestions(suggested_questions),
         });
         // Prefer the server-truth title (auto-generated from the first

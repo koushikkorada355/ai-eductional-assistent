@@ -12,6 +12,7 @@ from app.schemas.quiz import OpenEndedEvaluation
 from app.tasks.celery_app import celery_app
 from app.ai.llm import get_llm
 from app.services.analytics_service import record_mastery_snapshot
+from app.services.ai_usage_service import track_ai_call
 
 
 # Answers that mean "no attempt": blank, whitespace-only, or an explicit
@@ -47,6 +48,7 @@ def _blank_open_evaluation() -> dict:
 
 
 @celery_app.task(name="quiz.evaluate", bind=True, max_retries=3)
+@track_ai_call("quiz_evaluation")
 def evaluate_quiz_task(self, quiz_question_id: str, user_answer: str) -> str:
     logger.info(f"[quiz.evaluate] question_id={quiz_question_id}")
     db = SessionLocal()
@@ -236,6 +238,7 @@ def _evaluate_open(question: QuizQuestion, user_answer: str) -> dict:
 
 
 @celery_app.task(name="quiz.generate_batch", bind=True, max_retries=2)
+@track_ai_call("quiz_generation")
 def generate_batch_task(self, quiz_id: str, num_mcq: int = 3, num_open: int = 2) -> str:
     logger.info(f"[quiz.batch_task] quiz={quiz_id} mcq={num_mcq} open={num_open} entry")
     db = SessionLocal()

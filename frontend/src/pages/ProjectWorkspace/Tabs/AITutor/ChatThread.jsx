@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { IconChat, IconArrowRight } from '../../../../components/icons/Icons.jsx';
+import { IconChat, IconArrowRight, IconCheck } from '../../../../components/icons/Icons.jsx';
 import QuickActions from './QuickActions.jsx';
 
 // Matches every marker variant the model may emit:
@@ -20,13 +20,6 @@ export function stripCitations(text) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
-
-const SUGGESTIONS = [
-  'Explain a concept from my materials',
-  'Test my understanding',
-  'Give me an example',
-  'Help me revise',
-];
 
 /* Single-card flashcard viewer: click reveals the answer, Next advances,
  * finishing the deck ends the session. Raw Q/A markdown stays in the
@@ -145,6 +138,162 @@ function FlashcardDeck({ cards }) {
   );
 }
 
+/* Practice MCQ deck: interactive multiple-choice drill rendered inline in
+ * the chat. Answers are checked client-side only — nothing is written to
+ * quiz tables and mastery is never touched. Raw markdown stays in the
+ * message as the reload fallback. */
+const MCQ_LETTERS = ['A', 'B', 'C', 'D'];
+
+function McqDeck({ cards }) {
+  const [index, setIndex] = useState(0);
+  const [picked, setPicked] = useState(null);
+  const [checked, setChecked] = useState(false);
+  const [results, setResults] = useState([]);
+  const [finished, setFinished] = useState(false);
+  useEffect(() => {
+    setIndex(0);
+    setPicked(null);
+    setChecked(false);
+    setResults([]);
+    setFinished(false);
+  }, [cards]);
+  if (!Array.isArray(cards) || cards.length === 0) return null;
+  const total = cards.length;
+  const correctCount = results.filter(Boolean).length;
+
+  if (finished) {
+    const pct = Math.round((correctCount / total) * 100);
+    return (
+      <div className="flex w-full flex-col items-center gap-2 rounded-lg border border-line bg-surface p-5 text-center shadow-sm" aria-label="Practice complete">
+        <span className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary-soft font-display text-base font-bold text-primary">
+          {pct}%
+        </span>
+        <span className="font-display text-sm font-semibold text-heading">
+          You got {correctCount} of {total} right
+        </span>
+        <span className="text-xs text-muted">
+          {pct === 100 ? 'Flawless — nicely done.' : pct >= 60 ? 'Solid. Retry to lock it in.' : 'Good effort — review the explanations and retry.'}
+        </span>
+        <button
+          type="button"
+          onClick={() => { setIndex(0); setPicked(null); setChecked(false); setResults([]); setFinished(false); }}
+          className="mt-1 inline-flex min-h-[30px] items-center rounded-full border border-line bg-surface px-3 text-xs font-medium text-ink transition-colors hover:border-primary hover:bg-primary-soft hover:text-primary"
+        >
+          Retry practice
+        </button>
+      </div>
+    );
+  }
+
+  const card = cards[Math.min(index, total - 1)];
+  const last = index >= total - 1;
+  const answerIdx = Number(card.answer_index);
+  const optionClass = (i) => {
+    const base = 'flex w-full items-center gap-2.5 rounded-lg border px-3.5 py-2.5 text-left text-[13px] transition-colors';
+    if (!checked) {
+      return `${base} ${picked === i
+        ? 'border-primary bg-primary-soft font-medium text-primary'
+        : 'border-line bg-surface text-ink hover:border-primary hover:bg-primary-soft hover:text-primary'}`;
+    }
+    if (i === answerIdx) return `${base} border-green-600 bg-green-50 font-medium text-green-800`;
+    if (i === picked) return `${base} border-red-500 bg-red-50 font-medium text-red-700`;
+    return `${base} border-line bg-surface text-muted opacity-60`;
+  };
+
+  return (
+    <div className="flex w-full flex-col gap-2.5" aria-label={`Practice question ${index + 1} of ${total}`}>
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] font-bold uppercase tracking-[0.06em] text-muted">
+          Practice · {index + 1} of {total}
+        </span>
+        <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-canvas" aria-hidden="true">
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-300"
+            style={{ width: `${((index + 1) / total) * 100}%` }}
+          />
+        </div>
+        {results.length > 0 && (
+          <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-primary-soft px-1.5 text-[11px] font-bold text-primary" aria-label={`${correctCount} correct so far`}>
+            {correctCount} ✓
+          </span>
+        )}
+      </div>
+      <div className="rounded-lg border border-line bg-surface p-4 shadow-sm">
+        <p className="text-sm font-medium leading-relaxed text-heading">{card.question}</p>
+        <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label="Answer options">
+          {(card.options || []).slice(0, 4).map((opt, i) => (
+            <button
+              key={i}
+              type="button"
+              disabled={checked}
+              onClick={() => setPicked(i)}
+              aria-pressed={picked === i}
+              aria-label={`Option ${MCQ_LETTERS[i]}: ${opt}`}
+              className={optionClass(i)}
+            >
+              <span className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold ${
+                checked && i === answerIdx
+                  ? 'border-green-600 bg-green-600 text-white'
+                  : checked && i === picked
+                    ? 'border-red-500 bg-red-500 text-white'
+                    : picked === i
+                      ? 'border-primary bg-primary text-white'
+                      : 'border-line bg-canvas text-muted'
+              }`} aria-hidden="true">
+                {checked && i === answerIdx ? <IconCheck size={13} /> : MCQ_LETTERS[i]}
+              </span>
+              <span className="min-w-0 flex-1">{opt}</span>
+            </button>
+          ))}
+        </div>
+        {checked && card.explanation && (
+          <motion.p
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2 }}
+            className="mt-3 rounded-md bg-canvas px-3 py-2 text-xs leading-relaxed text-ink"
+          >
+            <strong className={picked === answerIdx ? 'text-green-800' : 'text-red-700'}>
+              {picked === answerIdx ? 'Correct. ' : 'Not quite. '}
+            </strong>
+            {card.explanation}
+          </motion.p>
+        )}
+        <div className="mt-3 flex items-center justify-end gap-2">
+          {!checked ? (
+            <button
+              type="button"
+              disabled={picked == null}
+              onClick={() => setChecked(true)}
+              className="inline-flex min-h-[30px] items-center rounded-full bg-primary px-4 text-xs font-semibold text-white transition-colors hover:bg-primary-dark disabled:opacity-50"
+            >
+              Check answer
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                const next = [...results, picked === answerIdx];
+                setResults(next);
+                if (last) {
+                  setFinished(true);
+                } else {
+                  setIndex((v) => v + 1);
+                  setPicked(null);
+                  setChecked(false);
+                }
+              }}
+              className="inline-flex min-h-[30px] items-center gap-1.5 rounded-full bg-primary px-4 text-xs font-semibold text-white transition-colors hover:bg-primary-dark [&>svg]:h-3.5 [&>svg]:w-3.5"
+            >
+              {last ? 'See results' : 'Next'} <IconArrowRight size={14} />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* Follow-up recommendations: clickable chips rendered under each AI
  * response. Clicking sends the question as a new tutor turn. */
 function SuggestedQuestions({ questions, disabled, onPick }) {
@@ -252,20 +401,9 @@ export default function ChatThread({
               </h4>
               <p className="max-w-[420px] text-[13px] text-muted">
                 Ask your AI Tutor about anything related to this project. Answers come strictly
-                from your uploaded documents, with page citations.
+                from your uploaded documents, with page citations. Use the Practice button below
+                for a quick MCQ drill on what you have been discussing.
               </p>
-              <div className="mt-2 grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
-                {SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => sendSuggestion(s)}
-                    className="rounded-lg border border-line bg-surface px-3.5 py-2.5 text-left text-[13px] font-medium text-ink shadow-sm transition-colors hover:border-primary hover:bg-primary-soft hover:text-primary"
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
             </div>
           )}
           <AnimatePresence initial={false}>
@@ -282,6 +420,8 @@ export default function ChatThread({
                     <div className="md-assistant text-sm leading-relaxed text-ink">
                       {Array.isArray(m.flashcards) && m.flashcards.length > 0 ? (
                         <FlashcardDeck cards={m.flashcards} />
+                      ) : Array.isArray(m.mcq) && m.mcq.length > 0 ? (
+                        <McqDeck cards={m.mcq} />
                       ) : (
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {stripCitations(m.content)}

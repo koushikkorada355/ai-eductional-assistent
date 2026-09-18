@@ -2,8 +2,9 @@ import api from '../../api/client.js';
 
 const base = (spaceId, projectId) => `/spaces/${spaceId}/projects/${projectId}`;
 
-// Turn an axios failure into a specific, actionable message so API problems
-// are diagnosable from the UI instead of surfacing as generic "failed".
+// Turn an axios failure into a short, user-friendly message. Technical
+// detail stays in devtools (console.error) — the learner never sees
+// server, network, or infrastructure wording.
 export function describeApiError(e, action) {
   const status = e?.response?.status;
   const detail = e?.response?.data?.detail;
@@ -16,21 +17,24 @@ export function describeApiError(e, action) {
     console.error(`[tutor] ${action} failed:`, status ?? 'no-response', e?.response?.data ?? e?.message);
   }
   if (!status) {
-    return `Cannot reach the backend server while trying to ${action}. Check: 1) "docker compose ps" (is backend up?), 2) "curl -i http://localhost:8000/health" (does it return healthy?), 3) open the app at http://localhost:5173 (not 127.0.0.1).`;
+    return `Couldn't complete that right now. Please check your connection and try again.`;
   }
   if (status === 404) {
-    return `Server has no conversation endpoints yet (404) — the backend is running old code. Restart it with: docker compose restart backend`;
+    return `That isn't available right now. Please try again later.`;
   }
   if (status === 401 || status === 403) {
-    return `Not authorized to ${action} (HTTP ${status}). Try logging in again.`;
+    return `Your session has expired. Please log in again.`;
   }
   if (status === 422) {
-    return detailText ? `Invalid request: ${detailText}` : `The server rejected the request (422) while trying to ${action}.`;
+    return detailText ? `Invalid request: ${detailText}` : `Please check your input and try again.`;
+  }
+  if (status === 429) {
+    return detailText || `You're doing that a bit too often. Please wait a moment and try again.`;
   }
   if (status >= 500) {
-    return `Server error (HTTP ${status}) while trying to ${action}. Check backend logs: docker compose logs backend${detailText ? ` — ${detailText}` : ''}`;
+    return `Something went wrong while trying to ${action}. Please try again in a moment.`;
   }
-  return detailText || `Failed to ${action} (HTTP ${status}).`;
+  return detailText || `Couldn't complete that. Please try again.`;
 }
 
 export const listConversations = (spaceId, projectId) =>

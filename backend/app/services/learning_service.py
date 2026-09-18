@@ -49,6 +49,68 @@ def concept_matches(question, concept_name):
     return len(name_words & significant_words(q)) >= 2
 
 
+# Greetings / small-talk only (hii, thanks, ok …). Anchored full-match so
+# real (even short) questions always pass through. Mirrors the frontend
+# guard in QuickActions.jsx.
+SMALL_TALK_RE = re.compile(
+    r"^(h+i+|hello+|hey+|yo|sup|thanks?|thank\s*you|thx|bye+|"
+    r"good\s?(morning|afternoon|evening|night)|o+k+|okay+|sure|yes+|no+|"
+    r"please+|help+|test+(ing)?|how\s+are\s+you(\s+doing)?)\W*$",
+    re.IGNORECASE,
+)
+
+# Drill placeholder bubbles ("Generating practice questions…", …) carry no
+# topic. Frontend source of truth is QuickActions.jsx; this matches the
+# whole family so backend filtering never depends on exact strings.
+PLACEHOLDER_RE = re.compile(r"^generating\s+.+\u2026\s*$", re.IGNORECASE)
+
+
+def is_small_talk(text):
+    """True for greeting/small-talk-only messages (never study content)."""
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not t:
+        return True
+    return bool(SMALL_TALK_RE.match(t))
+
+
+def is_placeholder_bubble(text):
+    """True for drill status bubbles ("Generating…") — no topic inside."""
+    return bool(PLACEHOLDER_RE.match(re.sub(r"\s+", " ", str(text or "")).strip()))
+
+
+def is_noise_message(text):
+    """True for messages that must never enter memory, summaries, or drills:
+    small-talk and drill placeholder bubbles."""
+    return is_small_talk(text) or is_placeholder_bubble(text)
+
+
+def concept_vocabulary(concept_names):
+    """Significant-word set across project concept names (grounding gate)."""
+    vocab = set()
+    for n in concept_names or []:
+        vocab |= significant_words(n)
+    return vocab
+
+
+def ground_candidate(cand_name, content, by_name, vocab):
+    """Decide whether an extracted memory row may be stored.
+
+    Gate-everything-but-names rule: a row is kept only if it names a real
+    project concept (case-insensitive exact match) or shares >=2
+    significant words with project concept vocabulary. Returns
+    (concept_id_or_None, keep_bool). Callers must exempt user_fact name
+    rows before calling.
+    """
+    if cand_name:
+        exact = (by_name or {}).get(cand_name.lower())
+        if exact is not None:
+            return exact.id, True
+        return None, False
+    if len(significant_words(content) & (vocab or set())) >= 2:
+        return None, True
+    return None, False
+
+
 def should_summarize(total_messages, new_since_summary):
     """Pure trigger: big enough conversation with enough unsummarized tail."""
     if total_messages < SUMMARY_MESSAGE_THRESHOLD:

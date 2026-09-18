@@ -15,20 +15,51 @@ from app.schemas.chat import (
     ConversationOut,
 )
 from app.ai.graphs.tutor_graph import tutor_app
-from app.ai.actions import get_action_hint, parse_flashcards, CREATE_FLASHCARDS
+from app.ai.actions import get_action_hint, parse_flashcards, parse_practice_mcq, CREATE_FLASHCARDS, PRACTICE
+from app.services.ai_usage_service import track_ai_call
+from loguru import logger
 
 router = APIRouter()
 
 DEFAULT_TITLE = "New conversation"
 
-QuickAction = Literal["summarize", "deep_dive", "create_flashcards"]
+QuickAction = Literal["summarize", "deep_dive", "create_flashcards", "practice"]
+
+
+def _provider_error(e: Exception) -> Optional[HTTPException]:
+    """Map LLM provider failures to friendly HTTP statuses (never raw 500s).
+
+    Rate limits (Groq 429 / OpenAI-compatible 429) → 429 with retry hint;
+    other provider errors → 502. Everything else returns None (re-raise).
+    """
+    name = type(e).__name__
+    msg = str(e)
+    try:
+        from groq import RateLimitError as _GroqRL
+        if isinstance(e, _GroqRL):
+            return HTTPException(status_code=429, detail="AI is busy right now (rate limit). Please wait a moment and try again.")
+    except Exception:
+        pass
+    try:
+        from openai import RateLimitError as _OpenAIRL
+        if isinstance(e, _OpenAIRL):
+            return HTTPException(status_code=429, detail="AI is busy right now (rate limit). Please wait a moment and try again.")
+    except Exception:
+        pass
+    if "RateLimit" in name or " 429" in msg or "rate_limit" in msg.lower():
+        return HTTPException(status_code=429, detail="AI is busy right now (rate limit). Please wait a moment and try again.")
+    if "APIStatusError" in name or "APIConnectionError" in name or "APITimeout" in name:
+        logger.warning(f"[tutor] provider error mapped to 502: {name}: {msg[:200]}")
+        return HTTPException(status_code=502, detail="AI provider had a hiccup. Please try again in a moment.")
+    return None
 
 
 class TutorRequest(BaseModel):
     question: str = Field(..., min_length=1)
     conversation_id: Optional[UUID] = None
     # Quick action shaping this turn (summarize/deep_dive/
-    # create_flashcards). Same RAG pipeline; only prompt guidance changes.
+    # create_flashcards/practice). Same RAG pipeline; only prompt guidance
+    # changes. Practice renders MCQs inline in chat and never touches mastery.
     action: Optional[QuickAction] = None
 
 
@@ -43,6 +74,9 @@ class TutorResponse(BaseModel):
     # Structured flashcards parsed from a create_flashcards turn (session
     # only; the markdown answer remains the persisted record).
     flashcards: Optional[Any] = None
+    # Structured MCQs parsed from a practice turn (session only, chat-only
+    # drill — nothing is written to quiz tables and mastery is untouched).
+    mcq: Optional[Any] = None
     # Follow-up questions shown as clickable chips under the AI response.
     suggested_questions: List[str] = []
 
@@ -164,6 +198,12 @@ def _normalize_suggestions(raw) -> list:
     return out
 
 
+def _tutor_ctx(chat_session, question, project, current_user, db, action=None):
+    return {"user_id": getattr(current_user, "id", None),
+            "project_id": getattr(project, "id", None)}
+
+
+@track_ai_call("tutor_answer", ctx_fn=_tutor_ctx)
 async def _run_tutor_turn(
     chat_session: ChatSession, question: str, project: Project,
     current_user: User, db: Session, action: Optional[str] = None,
@@ -194,6 +234,7 @@ async def _run_tutor_turn(
          "user_id": str(current_user.id), "user_name": "",
          "chat_session_id": str(chat_session.id),
          "action_hint": get_action_hint(action),
+         "action_id": action or "",
          "messages": messages_for_graph[-10:], "final_answer": ""},
         config=config,
     )
@@ -201,6 +242,7 @@ async def _run_tutor_turn(
     citations = _normalize_citations(result.get("citations") or [])
     suggestions = _normalize_suggestions(result.get("suggested_questions") or [])
     flashcards = parse_flashcards(answer) if action == CREATE_FLASHCARDS else []
+    practice_mcq = parse_practice_mcq(answer) if action == PRACTICE else []
 
     assistant_msg = Message(chat_session_id=chat_session.id, role="assistant", content=answer, citations=citations, suggested_questions=suggestions)
     db.add(assistant_msg)
@@ -222,7 +264,7 @@ async def _run_tutor_turn(
 
     return {"answer": answer, "chat_session_id": str(chat_session.id), "message_id": str(assistant_msg.id), "citations": citations,
             "conversation_title": chat_session.title or DEFAULT_TITLE,
-            "flashcards": flashcards or None, "suggested_questions": suggestions}
+            "flashcards": flashcards or None, "mcq": practice_mcq or None, "suggested_questions": suggestions}
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +353,15 @@ async def conversation_tutor_chat(
     db: Session = Depends(get_db),
 ):
     session = _get_owned_conversation(conversation_id, project, db)
-    return await _run_tutor_turn(session, body.question, project, current_user, db, action=body.action)
+    try:
+        return await _run_tutor_turn(session, body.question, project, current_user, db, action=body.action)
+    except HTTPException:
+        raise
+    except Exception as e:
+        mapped = _provider_error(e)
+        if mapped is not None:
+            raise mapped
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +379,15 @@ async def tutor_chat(
         chat_session = _get_owned_conversation(body.conversation_id, project, db)
     else:
         chat_session = get_or_create_session(project.id, db)
-    return await _run_tutor_turn(chat_session, body.question, project, current_user, db, action=body.action)
+    try:
+        return await _run_tutor_turn(chat_session, body.question, project, current_user, db, action=body.action)
+    except HTTPException:
+        raise
+    except Exception as e:
+        mapped = _provider_error(e)
+        if mapped is not None:
+            raise mapped
+        raise
 
 @router.get("/{project_id}/chat", response_model=ChatSessionOut)
 def get_chat_session(

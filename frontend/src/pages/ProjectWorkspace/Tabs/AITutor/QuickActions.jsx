@@ -1,22 +1,39 @@
 import {
-  IconFile, IconTarget, IconClipboard, IconSpark,
+  IconFile, IconTarget, IconClipboard, IconSpark, IconGraduation,
 } from '../../../../components/icons/Icons.jsx';
 
-/* The four tutor Quick Actions. Content actions flow through the normal
+/* Placeholders shown as the user message for generation turns: creative
+ * status text with no topic in it. Topic helpers skip them so later actions
+ * still key off the learner's real last question. */
+export const PRACTICE_PLACEHOLDER = 'Generating practice questions…';
+export const FLASHCARDS_PLACEHOLDER = 'Generating flashcards…';
+export const SUMMARY_PLACEHOLDER = 'Generating summary…';
+export const DEEPDIVE_PLACEHOLDER = 'Generating deep dive…';
+const PLACEHOLDER_BUBBLES = [
+  PRACTICE_PLACEHOLDER, FLASHCARDS_PLACEHOLDER,
+  SUMMARY_PLACEHOLDER, DEEPDIVE_PLACEHOLDER,
+];
+
+/* The five tutor Quick Actions. Content actions flow through the normal
  * tutor-turn pipeline (see tutorSlice.sendQuestion + backend app.ai.actions);
- * generate_quiz reuses the existing quiz-start flow instead. */
+ * generate_quiz reuses the existing quiz-start flow instead. Practice renders
+ * MCQs inline in the chat and never touches mastery. */
 export const QUICK_ACTIONS = [
   {
     id: 'summarize',
     label: 'Summarize',
     Icon: IconFile,
-    buildPrompt: (topic) => `Summarize concisely: ${topic}`,
+    // Creative placeholder bubble — never echoes the questions. The summary
+    // is built from conversation memory on the backend, not this text.
+    buildPrompt: () => SUMMARY_PLACEHOLDER,
   },
   {
     id: 'deep_dive',
     label: 'Deep Dive',
     Icon: IconTarget,
-    buildPrompt: (topic) => `Give me a detailed deep dive on ${topic}, including important details, relationships, and examples`,
+    // Creative placeholder bubble — never echoes the questions. The deep
+    // dive is built from conversation memory on the backend, not this text.
+    buildPrompt: () => DEEPDIVE_PLACEHOLDER,
   },
   {
     id: 'generate_quiz',
@@ -28,7 +45,19 @@ export const QUICK_ACTIONS = [
     id: 'create_flashcards',
     label: 'Create Flashcards',
     Icon: IconSpark,
-    buildPrompt: (topic) => `Create study flashcards covering: ${topic}`,
+    // Creative placeholder bubble — the real question is never shown and no
+    // topic is mentioned. Cards are generated from the retrieved materials
+    // for the recent discussion topic, not this text.
+    buildPrompt: () => FLASHCARDS_PLACEHOLDER,
+  },
+  {
+    id: 'practice',
+    label: 'Practice',
+    Icon: IconGraduation,
+    // Creative placeholder bubble — the real question is never shown and no
+    // topic is mentioned. The backend practice directive builds the MCQs
+    // from the conversation history, not this text.
+    buildPrompt: () => PRACTICE_PLACEHOLDER,
   },
 ];
 
@@ -43,6 +72,7 @@ const ACTION_PREFIXES = [
   'generate an adaptive quiz on:',
   'generate a quiz on:',
   'create study flashcards covering:',
+  'quiz me with practice mcqs on:',
 ];
 const ACTION_SUFFIX = ', including important details, relationships, and examples';
 
@@ -60,14 +90,34 @@ export function cleanTopic(raw) {
   return t;
 }
 
-/* Topic = most recent user message (what the learner is actually on),
+/* Topic = most recent real user message (what the learner is actually on),
  * unwrapped from any previous quick-action phrasing, truncated; falls
- * back to the project's key concepts. */
+ * back to the project's key concepts. Drill placeholder bubbles are skipped —
+ * they carry no topic. */
+export function lastRealUserText(activeMessages) {
+  const lastUser = [...(activeMessages || [])].reverse().find((m) => {
+    if (m?.role !== 'user') return false;
+    const t = cleanTopic(m?.content);
+    return Boolean(t) && !PLACEHOLDER_BUBBLES.includes(t);
+  });
+  return cleanTopic(lastUser?.content);
+}
+
 export function deriveActionTopic(activeMessages) {
-  const lastUser = [...(activeMessages || [])].reverse().find((m) => m.role === 'user');
-  const text = cleanTopic(lastUser?.content);
+  const text = lastRealUserText(activeMessages);
   if (text) return text.length > 200 ? `${text.slice(0, 200).trim()}…` : text;
   return 'the key concepts in my documents';
+}
+
+/* Greetings / small-talk only (hii, hello, thanks, ok …). Quick actions
+ * that generate study material must not run on these — there is no topic.
+ * Anchored full-match so real (even short) questions always pass through. */
+const GENERAL_RE = /^(h+i+|hello+|hey+|yo|sup|thanks?|thank\s*you|thx|bye+|good\s?(morning|afternoon|evening|night)|o+k+|okay+|sure|yes+|no+|please+|help+|test+(ing)?|how\s+are\s+you(\s+doing)?)\W*$/i;
+
+export function isGeneralMessage(text) {
+  const t = String(text || '').trim().replace(/\s+/g, ' ');
+  if (!t) return true;
+  return GENERAL_RE.test(t);
 }
 
 export function shortTopic(topic, max = 48) {

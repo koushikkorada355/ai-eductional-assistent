@@ -10,11 +10,19 @@ from app.db.models.space import Space
 from app.schemas.mastery import normalize_concept_name
 from app.tasks.celery_app import celery_app
 from app.services.analytics_service import record_mastery_snapshot
+from app.services.ai_usage_service import track_ai_call
 
 
 @celery_app.task(name="concepts.extract", bind=True, max_retries=3)
+@track_ai_call("concept_extraction")
 def extract_concepts_task(self, document_id: str) -> str:
     logger.info(f"[concepts.extract] project lookup for document_id={document_id}")
+    from app.config import settings as _settings
+    if not (_settings.INCEPTION_API_KEY or _settings.GROQ_API_KEY):
+        # No LLM configured: the Fake fallback returns non-JSON text, so skip
+        # fast instead of burning 3 retries on a guaranteed parse failure.
+        logger.warning(f"[concepts.extract] skipped doc {document_id}: no LLM key configured")
+        return "skipped:no-llm-key"
     db = SessionLocal()
     try:
         try:

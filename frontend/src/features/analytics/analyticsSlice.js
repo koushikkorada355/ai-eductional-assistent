@@ -31,13 +31,13 @@ export const loadAdminJobs = createAsyncThunk('analytics/loadAdminJobs', async (
   catch (e) { return rejectWithValue(serverMessage(e, 'Failed to load jobs')); }
 });
 
-export const loadAdminEvaluations = createAsyncThunk('analytics/loadAdminEvaluations', async (_, { rejectWithValue }) => {
-  try { return (await api.get('/admin/evaluations')).data; }
+export const loadAdminEvaluations = createAsyncThunk('analytics/loadAdminEvaluations', async (params, { rejectWithValue }) => {
+  try { return (await api.get('/admin/evaluations', { params: params || {} })).data; }
   catch (e) { return rejectWithValue(serverMessage(e, 'Failed to load evaluations')); }
 });
 
-export const loadAdminUsage = createAsyncThunk('analytics/loadAdminUsage', async (_, { rejectWithValue }) => {
-  try { return (await api.get('/admin/ai-usage')).data; }
+export const loadAdminUsage = createAsyncThunk('analytics/loadAdminUsage', async (params, { rejectWithValue }) => {
+  try { return (await api.get('/admin/ai-usage', { params: params || {} })).data; }
   catch (e) { return rejectWithValue(serverMessage(e, 'Failed to load AI usage')); }
 });
 

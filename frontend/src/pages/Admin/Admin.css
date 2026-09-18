@@ -186,6 +186,11 @@
   text-overflow: ellipsis;
 }
 
+.ops-bar-meta {
+  margin: 0 0 6px 180px;
+  font-size: 12px;
+}
+
 .ops-bar-track {
   flex: 1;
   height: 8px;
@@ -520,9 +525,170 @@
 @media (max-width: 1024px) {
   .ops-kpis { grid-template-columns: repeat(2, 1fr); }
   .ops-grid-2 { grid-template-columns: 1fr; }
+  .aiu-kpis { grid-template-columns: repeat(3, 1fr); }
+  .aiu-kpis-2 { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 640px) {
   .ops-wrap { padding: 20px 14px; }
   .ops-bar-label { width: 120px; }
+  .aiu-kpis { grid-template-columns: repeat(2, 1fr); }
+  .aiu-kpis-2 { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---- AI Usage (screenshot-style: filters + KPI cards + breakdown table) ---- */
+.aiu-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.aiu-filters {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.aiu-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.aiu-input {
+  min-height: 40px;
+  min-width: 230px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  padding: 0 18px;
+  font-size: 14px;
+  color: var(--body);
+}
+
+.aiu-input::placeholder { color: var(--muted); opacity: 0.7; }
+
+.aiu-select {
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--body);
+  cursor: pointer;
+}
+
+.aiu-refresh {
+  min-height: 40px;
+  border: none;
+  border-radius: 999px;
+  background: #141a33;
+  color: #fff;
+  padding: 0 24px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.aiu-refresh:hover { background: #232c52; }
+
+.aiu-kpis {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 16px;
+}
+
+.aiu-kpis-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+/* ---- AI Evaluation sections (Tutor / Retrieval / Assessment / Recommendations) ---- */
+.eval-label {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.aiu-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  padding: 22px 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+.aiu-num {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 21px;
+  font-weight: 700;
+  color: var(--heading);
+}
+
+.aiu-label {
+  font-size: 15px;
+  color: var(--muted);
+}
+
+.aiu-card {
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: var(--surface);
+  padding: 24px 26px;
+  box-shadow: var(--shadow-sm);
+}
+
+.aiu-card-title {
+  margin: 0 0 14px;
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--heading);
+}
+
+.aiu-table-wrap { overflow-x: auto; }
+
+.aiu-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.aiu-table thead th {
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.aiu-table tbody td {
+  padding: 13px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--body);
+  white-space: nowrap;
+}
+
+.aiu-table tbody tr:last-child td { border-bottom: none; }
+
+.aiu-r { text-align: right; }
+.aiu-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.aiu-dim { color: var(--muted); }

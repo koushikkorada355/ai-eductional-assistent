@@ -27,6 +27,7 @@ from app.db.models.assessment import (
 from app.db.models.chat import ChatSession, Message
 from app.db.models.document import Document
 from app.db.models.mastery import MasteryHistory, QuizHistory
+from app.db.models.ai_usage import AIUsage
 from app.db.models.project import Project
 from app.db.models.space import Space
 from app.db.models.user import User
@@ -156,6 +157,9 @@ def _check_workers() -> dict:
 
 def _ai_providers() -> dict:
     return {
+        "inception": {"status": "healthy" if settings.INCEPTION_API_KEY else "unavailable",
+                      "detail": f"model={settings.INCEPTION_MODEL}" if settings.INCEPTION_API_KEY else "INCEPTION_API_KEY not set"},
+        # Groq path kept (disabled 2026-09-18) for easy switch-back.
         "groq": {"status": "healthy" if settings.GROQ_API_KEY else "unavailable",
                  "detail": f"model={settings.GROQ_MODEL}" if settings.GROQ_API_KEY else "GROQ_API_KEY not set"},
         "google": {"status": "healthy" if settings.GOOGLE_API_KEY else "unavailable",
@@ -597,8 +601,128 @@ def admin_jobs(admin: User = Depends(require_admin), db: Session = Depends(get_d
 
 
 @router.get("/admin/evaluations")
-def admin_evaluations(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
-    history = db.query(QuizHistory).order_by(QuizHistory.created_at.desc()).limit(50).all()
+def admin_evaluations(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    days: int = Query(default=30, ge=0, le=3650, description="Last N days; 0 = all time"),
+):
+    """AI quality dashboard: tutor groundedness · retrieval · assessment · recommendations.
+
+    All numbers are derived from stored rows — nothing is fabricated:
+    - Tutor quality comes from assistant Message.citations (cited = supported).
+      Claim-level groundedness judging is not instrumented yet, so
+      supportedRate == citationCoverage by construction.
+    - Retrieval grounding uses assistant-message citation presence
+      (zero-context = answers with 0 citations) plus measured AIUsage
+      tutor_answer rows per model (calls / tokens / latency). Per-call chunk
+      counts and vector distances are not logged, so those components were
+      removed instead of showing permanent '—'.
+    - Assessment MCQ/open stats come from QuizQuestion.evaluation scores;
+      verdict pass/fail counts QuizHistory.is_correct plus evaluated quiz
+      questions (score >= 60 = pass). Partial = open answers with
+      0 < score < 100. Difficulty labels are not stored on questions, so the
+      Accuracy-by-difficulty component was removed instead of staying empty.
+    - Recommendations are generated inline and not logged with statuses;
+      only measured generation count (Total) is shown. Status breakdown was
+      removed instead of showing permanent zeros.
+    - days=0 means all time; otherwise UTC cutoff = now - days.
+    """
+    cutoff = None if not days else (datetime.utcnow() - timedelta(days=days))
+
+    def _in_range(ts):
+        return True if cutoff is None else (ts is not None and ts >= cutoff)
+
+    # ---- Tutor quality (assistant messages) ----
+    assistant_msgs = db.query(Message).filter(Message.role == "assistant").all()
+    assistant_msgs = [m for m in assistant_msgs if _in_range(m.created_at)]
+    answers = len(assistant_msgs)
+    cited_counts = []
+    for m in assistant_msgs:
+        c = m.citations if isinstance(m.citations, list) else []
+        cited_counts.append(len(c))
+    supported = sum(1 for n in cited_counts if n > 0)
+    unsupported = answers - supported
+    supported_rate = round(supported / answers * 100, 1) if answers else 0.0
+    citation_coverage = round(supported / answers * 100, 1) if answers else 0.0
+    avg_citations = round(sum(cited_counts) / answers, 2) if answers else 0.0
+
+    # Supported rate by week (last 8 full weeks + current, Monday buckets).
+    by_week: dict = {}
+    for m, n in zip(assistant_msgs, cited_counts):
+        if not m.created_at:
+            continue
+        d = m.created_at.date()
+        monday = (d - timedelta(days=d.weekday())).isoformat()
+        b = by_week.setdefault(monday, {"answers": 0, "supported": 0})
+        b["answers"] += 1
+        if n > 0:
+            b["supported"] += 1
+    supported_by_week = [
+        {"week": w,
+         "answers": v["answers"],
+         "supported": v["supported"],
+         "rate": round(v["supported"] / v["answers"] * 100, 1) if v["answers"] else 0.0}
+        for w, v in sorted(by_week.items())
+    ][-8:]
+
+    # ---- Retrieval grounding (only measured signals) ----
+    tutor_calls = answers
+    zero_context_rate = round(unsupported / answers * 100, 1) if answers else 0.0
+    try:
+        from app.services.ai_usage_service import _resolve_provider as _resolve_eval_provider
+    except Exception:
+        def _resolve_eval_provider(p, m):
+            return (p or "none")
+    usage_rows = db.query(AIUsage).all()
+    usage_in_range = [r for r in usage_rows if _in_range(r.created_at)]
+    tutor_usage = [r for r in usage_in_range if (r.feature or "") == "tutor_answer"]
+    by_model_map: dict = defaultdict(lambda: {"calls": 0, "tokens": 0, "lat": []})
+    for r in tutor_usage:
+        model = r.model or "—"
+        b = by_model_map[model]
+        b["calls"] += r.calls or 1
+        b["tokens"] += r.total_tokens or 0
+        if r.latency_ms is not None:
+            b["lat"].append(r.latency_ms)
+    retrieval_by_model = [
+        {"model": m, "calls": v["calls"], "tokens": v["tokens"],
+         "avgMs": round(sum(v["lat"]) / len(v["lat"]), 1) if v["lat"] else None}
+        for m, v in sorted(by_model_map.items(), key=lambda kv: kv[1]["calls"], reverse=True)
+    ]
+
+    # ---- Assessment quality ----
+    questions = db.query(QuizQuestion).all()
+    questions = [q for q in questions if _in_range(q.created_at)]
+    mcq_answered = [q for q in questions
+                    if (q.question_type or "").lower().startswith(("multiple", "mcq"))
+                    and q.user_answer is not None]
+    mcq_scores = [float((q.evaluation or {}).get("score"))
+                  for q in mcq_answered
+                  if isinstance((q.evaluation or {}).get("score"), (int, float))]
+    open_graded = [q for q in questions
+                   if (q.question_type or "").lower().startswith(("open",))
+                   and isinstance((q.evaluation or {}).get("score"), (int, float))]
+    open_scores = [float((q.evaluation or {}).get("score")) for q in open_graded]
+    partial = sum(1 for s in open_scores if 0 < s < 100)
+
+    hist = db.query(QuizHistory).all()
+    hist = [h for h in hist if _in_range(h.created_at)]
+    # Verdicts: adaptive-flow QuizHistory.is_correct plus evaluated batch-quiz
+    # questions (score >= 60 = pass). QuizHistory alone is empty when only the
+    # batch quiz flow has been used, which left these cards at 0.
+    graded_scores = [float((q.evaluation or {}).get("score")) for q in questions
+                     if isinstance((q.evaluation or {}).get("score"), (int, float))]
+    verdict_pass = (sum(1 for h in hist if h.is_correct)
+                    + sum(1 for s in graded_scores if s >= 60))
+    verdict_fail = (sum(1 for h in hist if not h.is_correct)
+                    + sum(1 for s in graded_scores if s < 60))
+
+    # ---- Recommendations: only measured generation count ----
+    rec_usage = [r for r in usage_in_range if (r.feature or "") == "recommendations"]
+    rec_total = sum(r.calls or 1 for r in rec_usage)
+
+    # ---- Recent items (back-compat for old UI) ----
+    recent_hist = sorted(hist, key=lambda h: h.created_at or datetime.min, reverse=True)[:50]
     concepts = {c.id: c.name for c in db.query(Concept).all()}
     users = {u.id: u.email for u in db.query(User).all()}
     items = [{
@@ -607,32 +731,153 @@ def admin_evaluations(admin: User = Depends(require_admin), db: Session = Depend
         "question_type": h.question_type,
         "is_correct": h.is_correct, "feedback": h.evaluator_feedback,
         "created_at": h.created_at,
-    } for h in history]
-    total = len(items)
+    } for h in recent_hist]
+    total_items = len(items)
     correct = sum(1 for i in items if i["is_correct"])
-    return {"tracked": total > 0,
-            "correctRate": round(correct / total * 100, 1) if total else 0,
-            "evaluated": total, "items": items}
+
+    tracked = bool(answers or questions or hist or usage_in_range)
+    return {
+        "tracked": tracked,
+        "range": {"days": days,
+                  "from": cutoff.isoformat() if cutoff else None,
+                  "to": datetime.utcnow().isoformat()},
+        # Back-compat keys for the previous minimal UI.
+        "correctRate": round(correct / total_items * 100, 1) if total_items else 0,
+        "evaluated": total_items,
+        "items": items,
+        "tutor": {
+            "answers": answers,
+            "supported": supported,
+            "unsupported": unsupported,
+            "supportedRate": supported_rate,
+            "citationCoverage": citation_coverage,
+            "avgCitations": avg_citations,
+            "supportedByWeek": supported_by_week,
+            "note": "Supported = assistant answers with >=1 citation. Claim-level judging not instrumented yet.",
+        },
+        "retrieval": {
+            "tutorCalls": tutor_calls,
+            "zeroContextRate": zero_context_rate,
+            "byModel": retrieval_by_model,
+            "note": "Zero-context = assistant answers with 0 citations. Per-model calls/tokens/latency are measured AIUsage rows.",
+        },
+        "assessment": {
+            "mcqAttempts": len(mcq_answered),
+            "mcqAvgScore": round(sum(mcq_scores) / len(mcq_scores), 2) if mcq_scores else 0.0,
+            "openEndedGrades": len(open_graded),
+            "openEndedAvg": round(sum(open_scores) / len(open_scores), 2) if open_scores else 0.0,
+            "verdictPass": verdict_pass,
+            "verdictFail": verdict_fail,
+            "verdictPartial": partial,
+        },
+        "recommendations": {
+            "tracked": bool(rec_total),
+            "total": rec_total,
+            "message": "Recommendations are generated inline; Total counts measured recommendation generations.",
+        },
+    }
 
 
 @router.get("/admin/ai-usage")
-def admin_ai_usage(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+def admin_ai_usage(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+    feature: Optional[str] = Query(default=None, description="Substring filter on feature name"),
+    provider: Optional[str] = Query(default=None, description="Exact provider filter ('inception', 'groq', 'none', ...)"),
+    days: int = Query(default=30, ge=1, le=365),
+):
+    """Screenshot-style usage: totals + feature × provider × model × day table.
+
+    Dates are UTC calendar days from each row's created_at. Latency p50/p95
+    use nearest-rank over whole-operation latencies. Cost is estimated from
+    provider token counts (see ai_usage_service.estimate_cost).
+    """
+    def _pct(sorted_vals, p):
+        if not sorted_vals:
+            return None
+        k = max(0, min(len(sorted_vals) - 1, int(-(-p * len(sorted_vals) // 1) - 1)))
+        return sorted_vals[k]
+
     messages = db.query(Message).all()
-    assistant = sum(1 for m in messages if m.role == "assistant")
-    # No token/cost columns exist anywhere; feature activity below is derived
-    # from stored rows and reported honestly as interaction counts.
-    return {"tracked": False,
-            "message": "AI token usage is not instrumented yet. No token, latency, or cost data has been collected.",
-            "totals": {"interactions": assistant + db.query(Quiz).count() + db.query(Assignment).count(),
-                       "tutorMessages": len(messages)},
-            "byFeature": [
-                {"feature": "AI Tutor", "interactions": len(messages)},
-                {"feature": "RAG", "interactions": assistant},
-                {"feature": "Quiz generation", "interactions": db.query(Quiz).count()},
-                {"feature": "Assessment", "interactions": db.query(Assignment).count()},
-                {"feature": "Concepts", "interactions": db.query(Concept).count()},
-                {"feature": "Summarization", "interactions": 0},
-            ]}
+    rows = db.query(AIUsage).all()
+    # Resolve legacy rows stored with provider='none' (e.g. tutor fast-paths)
+    # so the table never shows a blank/missing provider name. New rows are
+    # already normalized at write time — this only backfills reads.
+    try:
+        from app.services.ai_usage_service import _resolve_provider as _resolve_usage_provider
+    except Exception:
+        def _resolve_usage_provider(p, m):  # fallback when metering module unavailable
+            return (p or "none")
+
+    def _prov(r):
+        return _resolve_usage_provider(getattr(r, "provider", None), getattr(r, "model", None))
+
+    if not rows:
+        assistant = sum(1 for m in messages if m.role == "assistant")
+        return {"tracked": False,
+                "message": "AI operation tracking just started — no timed AI calls have been recorded yet. Counts below are derived from stored data.",
+                "calls": 0, "tokens": 0, "cost": 0.0, "errorRate": None,
+                "latencyP50": None, "latencyP95": None,
+                "providers": [],
+                "groups": [],
+                "totals": {"interactions": assistant + db.query(Quiz).count() + db.query(Assignment).count(),
+                           "tutorMessages": len(messages)},
+                "byFeature": [
+                    {"feature": "AI Tutor", "interactions": len(messages)},
+                    {"feature": "RAG", "interactions": assistant},
+                    {"feature": "Quiz generation", "interactions": db.query(Quiz).count()},
+                    {"feature": "Assessment", "interactions": db.query(Assignment).count()},
+                    {"feature": "Concepts", "interactions": db.query(Concept).count()},
+                    {"feature": "Summarization", "interactions": 0},
+                ]}
+
+    providers = sorted({_prov(r) for r in rows})
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    filt = [r for r in rows if r.created_at and r.created_at >= cutoff]
+    if feature:
+        needle = feature.strip().lower()
+        filt = [r for r in filt if needle in (r.feature or "").lower()]
+    if provider and provider != "all":
+        filt = [r for r in filt if _prov(r) == provider]
+
+    calls = sum(r.calls or 1 for r in filt)
+    tokens = sum(r.total_tokens or 0 for r in filt)
+    cost = round(sum(r.cost_usd or 0.0 for r in filt), 6)
+    error_rate = round(sum(1 for r in filt if not r.success) / len(filt) * 100, 1) if filt else 0.0
+    lats = sorted(r.latency_ms for r in filt if r.latency_ms is not None)
+    p50 = round(_pct(lats, 0.50), 1) if lats else None
+    p95 = round(_pct(lats, 0.95), 1) if lats else None
+
+    grouped = defaultdict(lambda: {"calls": 0, "tokens": 0, "cost": 0.0, "lat": []})
+    for r in filt:
+        key = ((r.created_at.date().isoformat() if r.created_at else "—"),
+               r.feature or "unknown", _prov(r), r.model or "—")
+        g = grouped[key]
+        g["calls"] += r.calls or 1
+        g["tokens"] += r.total_tokens or 0
+        g["cost"] += r.cost_usd or 0.0
+        if r.latency_ms is not None:
+            g["lat"].append(r.latency_ms)
+    groups = [{"day": k[0], "feature": k[1], "provider": k[2], "model": k[3],
+               "calls": v["calls"], "tokens": v["tokens"],
+               "cost": round(v["cost"], 6),
+               "avgMs": round(sum(v["lat"]) / len(v["lat"]), 1) if v["lat"] else None}
+              for k, v in grouped.items()]
+    groups.sort(key=lambda g: g["day"], reverse=True)
+
+    feats = defaultdict(int)
+    for r in filt:
+        feats[r.feature or "unknown"] += r.calls or 1
+
+    return {"tracked": True,
+            "message": "Measured per AI operation. Cost is estimated from provider token counts.",
+            "calls": calls, "tokens": tokens, "cost": cost,
+            "errorRate": error_rate, "latencyP50": p50, "latencyP95": p95,
+            "providers": providers,
+            "groups": groups[:200],
+            "totals": {"interactions": calls, "tutorMessages": len(messages)},
+            "byFeature": [{"feature": f, "interactions": v}
+                          for f, v in sorted(feats.items())]}
 
 
 @router.get("/admin/health")
@@ -653,6 +898,7 @@ def admin_health(admin: User = Depends(require_admin), db: Session = Depends(get
         {"name": database["name"], "status": database["status"], "detail": database["detail"]},
         {"name": "Redis", "status": redis["status"], "detail": redis["detail"]},
         {"name": "Background workers", "status": workers["status"], "detail": workers["detail"]},
+        {"name": "AI provider (Inception)", "status": providers["inception"]["status"], "detail": providers["inception"]["detail"]},
         {"name": "AI provider (Groq)", "status": providers["groq"]["status"], "detail": providers["groq"]["detail"]},
         {"name": "AI provider (Google)", "status": providers["google"]["status"], "detail": providers["google"]["detail"]},
         {"name": "Document processing", "status": "degraded" if failed else "healthy",

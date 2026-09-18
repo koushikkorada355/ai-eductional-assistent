@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7 # 7 days
     GROQ_API_KEY: str | None = None
     GROQ_MODEL: str | None = None
+    # Inception Labs (Mercury) — OpenAI-compatible chat API. Active provider.
+    # Get a key at https://platform.inceptionlabs.ai/dashboard/api-keys
+    INCEPTION_API_KEY: str | None = None
+    INCEPTION_MODEL: str | None = "mercury-2.5"
+    INCEPTION_BASE_URL: str | None = "https://api.inceptionlabs.ai/v1"
     LANGCHAIN_TRACING_V2: bool | None = None
     LANGCHAIN_API_KEY: str | None = None
     LANGCHAIN_PROJECT: str | None = None
@@ -20,6 +25,11 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str | None = None
     COLIVARA_API_KEY: str | None = None
     OCR_API_KEY: str | None = None
+
+    # Default admin account, seeded on backend startup (env-overridable).
+    ADMIN_EMAIL: str = "admin@gmail.com"
+    ADMIN_PASSWORD: str = "12345"
+    ADMIN_NAME: str = "admin"
 
     # We tell Pydantic to look for a .env file, but Docker will inject the env vars directly
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra='ignore')

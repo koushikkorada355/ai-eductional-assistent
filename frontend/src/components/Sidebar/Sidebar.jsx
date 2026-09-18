@@ -4,8 +4,8 @@ import { useNavigate, useParams, useLocation, useSearchParams } from 'react-rout
 import { loadSpaces, loadProjects } from '../../features/project/spaceProjectSlice.js';
 import { TABS, tabFromLocation, tabHref } from '../../pages/ProjectWorkspace/tabs.js';
 import {
-  IconX, IconChart, IconFolder, IconGraduation,
-  IconPlus, IconArrowLeft,
+  IconX, IconChart, IconFolder, IconGraduation, IconGrid,
+  IconPlus, IconArrowLeft, IconChevron,
 } from '../icons/Icons.jsx';
 
 /* Progressive drill-down navigation — one level at a time, never the whole
@@ -91,7 +91,24 @@ function CreateAction({ onClick, label }) {
   );
 }
 
-export default function Sidebar({ open, onClose, isAdmin }) {
+function RailItem({ active, onClick, label, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      aria-current={active ? 'page' : undefined}
+      className={`inline-flex h-9 w-9 items-center justify-center rounded-md transition-colors [&>svg]:h-[18px] [&>svg]:w-[18px] ${
+        active ? 'bg-primary-soft text-primary' : 'text-muted hover:bg-canvas hover:text-primary'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+export default function Sidebar({ open, onClose, isAdmin, collapsed, onCollapse, onExpand }) {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const location = useLocation();
@@ -122,6 +139,66 @@ export default function Sidebar({ open, onClose, isAdmin }) {
 
   const level = inProject ? 2 : selectedSpace ? 1 : 0;
 
+  // Collapsed desktop rail: the workspace absorbs the freed width via flex.
+  // (Below lg the rail stays hidden; the drawer + header button apply.)
+  if (collapsed) {
+    return (
+      <aside
+        aria-label="Primary navigation (collapsed)"
+        className="hidden w-14 shrink-0 flex-col items-center gap-1 border-r border-line bg-surface py-3 lg:flex lg:sticky lg:top-0 lg:h-screen"
+      >
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-primary font-display text-[15px] font-bold text-white">
+          A
+        </span>
+        <RailItem label="Expand navigation" onClick={onExpand}>
+          <IconChevron />
+        </RailItem>
+        {level === 2 && (
+          <>
+            <RailItem label={`Back to ${projectSpace?.name || 'Spaces'}`} onClick={() => go(`/spaces?space=${spaceId}`)}>
+              <IconArrowLeft />
+            </RailItem>
+            <span className="my-1 h-px w-8 bg-line" aria-hidden="true" />
+            {PROJECT_LINKS.map((t) => (
+              <RailItem key={t.id} label={t.id} active={activeTab === t.id} onClick={() => go(tabHref(t.id, spaceId, projectId))}>
+                <t.Icon />
+              </RailItem>
+            ))}
+          </>
+        )}
+        {level === 1 && (
+          <>
+            <RailItem label="Back to Spaces" onClick={() => go('/spaces')}>
+              <IconArrowLeft />
+            </RailItem>
+            <RailItem label="Create Project" onClick={() => go(`/spaces?space=${selectedSpace.id}&create=project`)}>
+              <IconPlus size={18} />
+            </RailItem>
+          </>
+        )}
+        {level === 0 && (
+          <>
+            <RailItem label="Spaces" active={onSpacesRoute} onClick={() => go('/spaces')}>
+              <IconFolder />
+            </RailItem>
+            <span className="mt-auto" aria-hidden="true" />
+            <RailItem label="Dashboard" active={location.pathname === '/'} onClick={() => go('/')}>
+              <IconGrid />
+            </RailItem>
+            {isAdmin && (
+              <RailItem label="Admin" active={location.pathname === '/admin'} onClick={() => go('/admin')}>
+                <IconGraduation />
+              </RailItem>
+            )}
+            <RailItem label="Global Analytics" active={location.pathname === '/analytics'} onClick={() => go('/analytics')}>
+              <IconChart />
+            </RailItem>
+          </>
+        )}
+      </aside>
+    );
+  }
+
   return (
     <aside
       className={`fixed bottom-0 left-0 top-0 z-50 flex w-[264px] shrink-0 -translate-x-full flex-col border-r border-line bg-surface transition-transform duration-200 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 ${
@@ -144,6 +221,15 @@ export default function Sidebar({ open, onClose, isAdmin }) {
           </span>
           <span className="block truncate text-[11px] text-muted">Learn from your documents</span>
         </span>
+        <button
+          type="button"
+          onClick={onCollapse}
+          aria-label="Collapse navigation"
+          title="Collapse navigation"
+          className="hidden h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md text-muted hover:bg-canvas hover:text-ink lg:inline-flex [&>svg]:h-[13px] [&>svg]:w-[13px]"
+        >
+          <span className="inline-flex rotate-180"><IconChevron /></span>
+        </button>
         <button
           type="button"
           onClick={onClose}
@@ -219,6 +305,12 @@ export default function Sidebar({ open, onClose, isAdmin }) {
               onClick={() => go('/spaces')}
             />
             <div className="mt-auto flex flex-col gap-0.5 border-t border-line pt-2">
+              <NavItem
+                label="Dashboard"
+                icon={<IconGrid />}
+                active={location.pathname === '/'}
+                onClick={() => go('/')}
+              />
               {isAdmin && (
                 <NavItem
                   label="Admin"
@@ -246,6 +338,12 @@ export default function Sidebar({ open, onClose, isAdmin }) {
               <CreateAction onClick={() => go('/spaces?create=space')} label="Create Space" />
             </div>
             <div className="mt-auto flex flex-col gap-0.5 border-t border-line pt-2">
+              <NavItem
+                label="Dashboard"
+                icon={<IconGrid />}
+                active={false}
+                onClick={() => go('/')}
+              />
               {isAdmin && (
                 <NavItem
                   label="Admin"

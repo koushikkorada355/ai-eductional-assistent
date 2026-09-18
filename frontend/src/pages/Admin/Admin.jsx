@@ -3,14 +3,14 @@ import { useDispatch, useSelector } from 'react-redux';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   loadAdminOverview, loadAdminUsers, loadAdminUserDetail, loadAdminSpaces,
-  loadAdminProjects, loadAdminActivity, loadAdminLearning, loadAdminJobs,
+  loadAdminProjects, loadAdminActivity, loadAdminJobs,
   loadAdminEvaluations, loadAdminUsage, loadAdminHealth,
 } from '../../features/analytics/analyticsSlice.js';
 import { PageHeader, Stat, StatusBadge, EmptyState, ProgressBar } from '../../components/ui/ui.jsx';
 import './Admin.css';
 
 const TABS = [
-  'Overview', 'Users', 'Spaces & Projects', 'Activity', 'Learning',
+  'Overview', 'Users', 'Spaces & Projects', 'Activity',
   'AI Usage', 'AI Evaluation', 'Processing', 'Health',
 ];
 
@@ -396,107 +396,293 @@ function Activity({ data, onFilter }) {
   );
 }
 
-/* ================= LEARNING ================= */
-function Learning({ data }) {
-  if (!data) return <EmptyState title="No learning data" body="Learning insights appear once users study, quiz, and build mastery." />;
-  const m = data.mastery || {};
-  const dist = m.distribution || { strong: 0, learning: 0, needsWork: 0 };
-  const distTotal = Math.max(1, dist.strong + dist.learning + dist.needsWork);
-  return (
-    <>
-      <div className="ops-kpis">
-        <Kpi icon={I.quiz} value={data.quiz?.completed ?? 0} label="Quizzes completed" />
-        <Kpi icon={I.pulse} value={`${m.average ?? 0}%`} label="Avg platform mastery" />
-        <Kpi icon={I.project} value={data.assessment?.submitted ?? 0} label="Assessments submitted" />
-        <Kpi icon={I.cpu} value={`${data.assessment?.averageScore ?? 0}%`} label="Avg assessment score" />
-      </div>
-      <div className="ops-grid-2">
-        <Card title="Quiz performance" sub="Completed quiz scores over time">
-          {data.quiz?.trend?.length
-            ? <Sparkline points={data.quiz.trend.map((t) => ({ date: t.date, count: t.score || 0 }))} />
-            : <p className="ops-muted">No completed quizzes yet.</p>}
-        </Card>
-        <Card title="Mastery trends" sub="Correct assessment answers per day">
-          {data.assessment?.trend?.length
-            ? <Sparkline points={data.assessment.trend.map((t) => ({ date: t.date, count: t.score || 0 }))} />
-            : <p className="ops-muted">No assessment trend yet.</p>}
-        </Card>
-      </div>
-      <div className="ops-grid-2">
-        <Card title="Concepts requiring attention" sub="Weakest mastery platform-wide">
-          {(data.needsAttention || []).length === 0 && <p className="ops-muted">No concepts below 40% mastery.</p>}
-          {(data.needsAttention || []).map((c) => (
-            <div key={c.id} className="ops-concept-row">
-              <div><strong>{c.name}</strong><small className="ops-muted">{c.project}{c.space ? ` · ${c.space}` : ''}</small></div>
-              <span className="ops-mastery-pill weak">{c.mastery}%</span>
-            </div>
-          ))}
-        </Card>
-        <Card title="Mastery distribution" sub="Where all tracked concepts sit">
-          <BarRow label="Strong (70%+)" value={dist.strong} total={distTotal} tone="green" />
-          <BarRow label="Learning (40–69%)" value={dist.learning} total={distTotal} />
-          <BarRow label="Needs work (<40%)" value={dist.needsWork} total={distTotal} tone="red" />
-          <p className="ops-muted ops-pad-top">Recommendation activity: {data.recommendations?.tracked ? 'tracked' : data.recommendations?.message || 'not logged yet.'}</p>
-        </Card>
-      </div>
-    </>
-  );
-}
-
 /* ================= AI USAGE ================= */
-function AiUsage({ usage }) {
+const fmtTokens = (v) => {
+  const n = Number(v) || 0;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return `${n}`;
+};
+const fmtCost = (v) => `$${(Number(v) || 0).toFixed(4)}`;
+const fmtMs = (v) => (v == null ? '—' : `${Math.round(Number(v))}ms`);
+// Friendly labels so the table never shows a blank/raw provider or feature.
+// Backend now resolves legacy provider='none' to the configured provider;
+// any remaining 'none' truly means "no LLM call" → show as system.
+const FEATURE_LABELS = {
+  tutor_answer: 'AI Tutor',
+  quiz_generation: 'Quiz generation',
+  quiz_evaluation: 'Quiz evaluation',
+  assignment_generation: 'Assignment generation',
+  assignment_evaluation: 'Assignment evaluation',
+  concept_extraction: 'Concept extraction',
+  recommendations: 'Recommendations',
+  summarization: 'Summarization',
+  other: 'Other',
+};
+const displayFeature = (f) => FEATURE_LABELS[f] || f || '—';
+const displayProvider = (p) => {
+  if (!p || p === '—') return '—';
+  if (p === 'none') return 'system';
+  return p;
+};
+const displayModel = (m) => {
+  if (!m || m === '—' || m === 'unconfigured' || m === 'fake') return '—';
+  return m;
+};
+
+function AiUsage({ usage, onFilter }) {
+  const [feature, setFeature] = useState('');
+  const [provider, setProvider] = useState('all');
+  useEffect(() => { onFilter({}); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const apply = () => onFilter({
+    ...(feature.trim() ? { feature: feature.trim() } : {}),
+    ...(provider && provider !== 'all' ? { provider } : {}),
+  });
   if (!usage) return <EmptyState title="No AI usage data" body="Usage appears once the platform serves AI requests." />;
-  const feats = usage.byFeature || [];
-  const max = Math.max(1, ...feats.map((f) => f.interactions || 0));
+  const groups = usage.groups || [];
+  const providers = usage.providers || [];
   return (
-    <>
-      <div className="ops-kpis">
-        <Kpi icon={I.cpu} value={usage.totals?.interactions ?? 0} label="Total AI requests" />
-        <Kpi icon={I.chat} value={usage.totals?.tutorMessages ?? 0} label="Tutor messages" />
+    <div className="aiu-wrap">
+      <div className="aiu-filters">
+        <label className="aiu-filter">
+          <span>Feature</span>
+          <input
+            type="text" placeholder="e.g. quiz_generation" value={feature}
+            onChange={(e) => setFeature(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') apply(); }}
+            aria-label="Filter by feature" className="aiu-input"
+          />
+        </label>
+        <label className="aiu-filter">
+          <span>Provider</span>
+          <select value={provider} onChange={(e) => setProvider(e.target.value)} aria-label="Filter by provider" className="aiu-select">
+            <option value="all">All</option>
+            {providers.map((p) => <option key={p} value={p}>{displayProvider(p)}</option>)}
+          </select>
+        </label>
+        <button type="button" onClick={apply} className="aiu-refresh">Refresh</button>
       </div>
-      <div className="ops-grid-2">
-        <Card title="AI feature usage" sub="Real interaction counts from stored data — not token-metered">
-          {feats.map((f) => <BarRow key={f.feature} label={f.feature} value={f.interactions || 0} total={max} />)}
-        </Card>
-        <Card title="Tokens, latency & cost" sub="Success rate, latency, tokens and estimated cost">
-          <EmptyState title="Not instrumented yet" body={usage.message || 'No token, latency, or cost data has been collected.'} />
-        </Card>
+      <div className="aiu-kpis">
+        <div className="aiu-kpi"><span className="aiu-num">{usage.calls ?? usage.totals?.interactions ?? 0}</span><span className="aiu-label">Calls</span></div>
+        <div className="aiu-kpi"><span className="aiu-num">{fmtTokens(usage.tokens)}</span><span className="aiu-label">Tokens</span></div>
+        <div className="aiu-kpi"><span className="aiu-num">{fmtCost(usage.cost)}</span><span className="aiu-label">Cost</span></div>
+        <div className="aiu-kpi"><span className="aiu-num">{usage.errorRate != null ? `${Number(usage.errorRate).toFixed(1)}%` : '—'}</span><span className="aiu-label">Error rate</span></div>
+        <div className="aiu-kpi"><span className="aiu-num">{fmtMs(usage.latencyP50)}</span><span className="aiu-label">Latency p50</span></div>
+        <div className="aiu-kpi"><span className="aiu-num">{fmtMs(usage.latencyP95)}</span><span className="aiu-label">Latency p95</span></div>
       </div>
-    </>
+      <section className="aiu-card">
+        <h3 className="aiu-card-title">Feature × provider × model × day</h3>
+        {groups.length === 0 ? (
+          <p className="ops-muted ops-pad">{usage.message || 'No AI calls match these filters yet.'}</p>
+        ) : (
+          <div className="aiu-table-wrap">
+            <table className="aiu-table">
+              <thead>
+                <tr>{['Day', 'Feature', 'Provider', 'Model', 'Calls', 'Tokens', 'Cost', 'Avg ms'].map((h) => <th key={h} className={['Calls', 'Tokens', 'Cost', 'Avg ms'].includes(h) ? 'aiu-r' : ''}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {groups.map((g, i) => (
+                  <tr key={`${g.day}-${g.feature}-${g.provider}-${g.model}-${i}`}>
+                    <td className="aiu-mono">{g.day}</td>
+                    <td title={g.feature}>{displayFeature(g.feature)}</td>
+                    <td className="aiu-dim" title={g.provider === 'none' ? 'No LLM call (deterministic path)' : g.provider}>{displayProvider(g.provider)}</td>
+                    <td className="aiu-dim">{displayModel(g.model)}</td>
+                    <td className="aiu-r aiu-mono">{g.calls}</td>
+                    <td className="aiu-r aiu-mono">{fmtTokens(g.tokens)}</td>
+                    <td className="aiu-r aiu-mono">{fmtCost(g.cost)}</td>
+                    <td className="aiu-r aiu-mono">{fmtMs(g.avgMs)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
 /* ================= AI EVALUATION ================= */
-function AiEvaluation({ evaluations }) {
-  if (!evaluations || !evaluations.tracked) {
+const fmtPct1 = (v) => (v == null ? '—' : `${Number(v).toFixed(1)}%`);
+const fmtInt = (v) => (v == null ? '—' : `${Number(v).toLocaleString()}`);
+const fmtAvg2 = (v) => (v == null ? '—' : Number(v).toFixed(2));
+const mmdd = (iso) => {
+  if (!iso) return '—';
+  const parts = String(iso).split('-');
+  if (parts.length < 3) return String(iso);
+  return `${parts[1]}-${parts[2]}`;
+};
+
+function WeekChart({ points }) {
+  const data = points || [];
+  const w = 900;
+  const h = 220;
+  const padL = 8;
+  const padR = 12;
+  const padT = 12;
+  const padB = 28;
+  if (!data.length) {
     return (
-      <Card title="AI quality" sub="Tutor quality · groundedness · citations · retrieval · assessment · recommendations">
-        <EmptyState
-          title="No evaluation data yet"
-          body="Quality signals (tutor groundedness, citation correctness, retrieval relevance, assessment and recommendation quality) will appear here once evaluations are recorded. Nothing is fabricated in the meantime."
-        />
-      </Card>
+      <div>
+        <svg viewBox={`0 0 ${w} ${h}`} className="ops-spark" role="img" aria-label="Supported rate by week (no data)">
+          {[0.2, 0.4, 0.6, 0.8].map((f, i) => (
+            <line key={i} x1={padL + (w - padL - padR) * f} y1={padT} x2={padL + (w - padL - padR) * f} y2={h - padB}
+              stroke="var(--border)" strokeWidth="1" strokeDasharray="4 4" />
+          ))}
+          <line x1={padL} y1={padT} x2={padL} y2={h - padB} stroke="var(--muted)" strokeWidth="1" />
+          <line x1={padL} y1={h - padB} x2={w - padR} y2={h - padB} stroke="var(--muted)" strokeWidth="1" />
+        </svg>
+        <p className="ops-muted ops-pad">No weekly data in this range yet.</p>
+      </div>
     );
   }
+  const stepX = data.length > 1 ? (w - padL - padR) / (data.length - 1) : 0;
+  const yFor = (rate) => {
+    const r = Math.max(0, Math.min(100, Number(rate) || 0));
+    return padT + (1 - r / 100) * (h - padT - padB);
+  };
+  const pts = data.map((p, i) => `${(padL + i * stepX).toFixed(1)},${yFor(p.rate).toFixed(1)}`).join(' ');
   return (
-    <>
-      <div className="ops-kpis">
-        <Kpi icon={I.quiz} value={`${evaluations.correctRate}%`} label="Correct rate" />
-        <Kpi icon={I.cpu} value={evaluations.evaluated} label="Evaluated answers" />
-      </div>
-      <Card title="Recent evaluations" sub="Tutor quality, groundedness and assessment signals from quiz history">
-        {evaluations.items.map((e) => (
-          <div key={e.id} className="ops-eval-row">
-            <span className={`ops-eval-mark ${e.is_correct ? 'ok' : 'bad'}`}>{e.is_correct ? '✓' : '✕'}</span>
-            <div>
-              <strong>{e.concept}</strong>
-              <small className="ops-muted">{e.user} · {e.question_type}</small>
-              {e.feedback && <p className="ops-muted">{e.feedback}</p>}
-            </div>
-          </div>
+    <div>
+      <svg viewBox={`0 0 ${w} ${h}`} className="ops-spark" role="img" aria-label="Supported rate by week">
+        {[0, 25, 50, 75, 100].map((gv) => (
+          <line key={gv} x1={padL} y1={yFor(gv)} x2={w - padR} y2={yFor(gv)}
+            stroke="var(--border)" strokeWidth="1" strokeDasharray={gv === 0 ? undefined : '4 4'} opacity="0.7" />
         ))}
-      </Card>
-    </>
+        {data.length === 1 ? (
+          <circle cx={padL} cy={yFor(data[0].rate)} r="4" fill="var(--primary)">
+            <title>{`${data[0].week}: ${fmtPct1(data[0].rate)}`}</title>
+          </circle>
+        ) : (
+          <>
+            <polyline points={pts} fill="none" stroke="var(--primary)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            {data.map((p, i) => (
+              <circle key={p.week} cx={padL + i * stepX} cy={yFor(p.rate)} r="3.5" fill="var(--primary)">
+                <title>{`${p.week}: ${fmtPct1(p.rate)} (${p.supported}/${p.answers})`}</title>
+              </circle>
+            ))}
+          </>
+        )}
+        {data.map((p, i) => (
+          <text key={`x-${p.week}`} x={padL + i * stepX} y={h - 8} textAnchor="middle" fontSize="11" fill="var(--muted)">
+            {mmdd(p.week)}
+          </text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function EvalKpi({ value, label, sub }) {
+  return (
+    <div className="aiu-kpi">
+      <span className="aiu-num">{value}</span>
+      <span className="aiu-label">{label}</span>
+      {sub && <span className="ops-muted" style={{ fontSize: 12 }}>{sub}</span>}
+    </div>
+  );
+}
+
+function AiEvaluation({ evaluations, onFilter }) {
+  const [days, setDays] = useState(30);
+  useEffect(() => { onFilter({ days: 30 }); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const pick = (d) => { setDays(d); onFilter({ days: d }); };
+  const refresh = () => onFilter({ days });
+
+  if (!evaluations) {
+    return <EmptyState title="Loading evaluation" body="Fetching tutor, retrieval, assessment and recommendation quality…" />;
+  }
+  const t = evaluations.tutor || {};
+  const r = evaluations.retrieval || {};
+  const a = evaluations.assessment || {};
+  const rec = evaluations.recommendations || {};
+  const byModel = r.byModel || [];
+  const week = t.supportedByWeek || [];
+
+  return (
+    <div className="aiu-wrap">
+      <div className="aiu-filters" role="group" aria-label="Evaluation time range">
+        {[{ label: '7d', value: 7 }, { label: '30d', value: 30 }, { label: 'All', value: 0 }].map((o) => (
+          <button
+            key={o.label}
+            type="button"
+            onClick={() => pick(o.value)}
+            className={`ops-tab ${days === o.value ? 'ops-tab-active' : ''}`}
+            aria-pressed={days === o.value}
+          >
+            {o.label}
+          </button>
+        ))}
+        <button type="button" onClick={refresh} className="ops-tab">Refresh</button>
+      </div>
+
+      {!evaluations.tracked && (
+        <p className="ops-muted">
+          No evaluation data in this range yet — quality signals will appear here once tutor answers,
+          quizzes and recommendations are recorded. Nothing is fabricated in the meantime.
+        </p>
+      )}
+
+      <span className="eval-label">Tutor quality</span>
+      <div className="aiu-kpis">
+        <EvalKpi value={fmtInt(t.answers)} label="Answers" />
+        <EvalKpi value={fmtInt(t.supported)} label="Supported" />
+        <EvalKpi value={fmtInt(t.unsupported)} label="Unsupported" />
+        <EvalKpi value={fmtPct1(t.supportedRate)} label="Supported rate" />
+        <EvalKpi value={fmtPct1(t.citationCoverage)} label="Citation coverage" />
+        <EvalKpi value={fmtAvg2(t.avgCitations)} label="Avg citations" />
+      </div>
+      <section className="aiu-card">
+        <h3 className="aiu-card-title">Supported rate by week (%)</h3>
+        <WeekChart points={week} />
+      </section>
+
+      <span className="eval-label">Retrieval grounding</span>
+      <div className="aiu-kpis aiu-kpis-2">
+        <EvalKpi value={fmtInt(r.tutorCalls)} label="Tutor calls" />
+        <EvalKpi value={fmtPct1(r.zeroContextRate)} label="Zero-context rate" />
+      </div>
+      <section className="aiu-card">
+        <h3 className="aiu-card-title">Retrieval by model</h3>
+        {byModel.length === 0 ? (
+          <p className="ops-muted ops-pad">
+            No tutor model usage in this range yet.
+          </p>
+        ) : (
+          <div className="aiu-table-wrap">
+            <table className="aiu-table">
+              <thead>
+                <tr><th>Model</th><th className="aiu-r">Calls</th><th className="aiu-r">Tokens</th><th className="aiu-r">Avg ms</th></tr>
+              </thead>
+              <tbody>
+                {byModel.map((m) => (
+                  <tr key={m.model}>
+                    <td className="aiu-mono">{displayModel(m.model)}</td>
+                    <td className="aiu-r aiu-mono">{fmtInt(m.calls)}</td>
+                    <td className="aiu-r aiu-mono">{fmtTokens(m.tokens)}</td>
+                    <td className="aiu-r aiu-mono">{fmtMs(m.avgMs)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <span className="eval-label">Assessment quality</span>
+      <div className="aiu-kpis">
+        <EvalKpi value={fmtInt(a.mcqAttempts)} label="MCQ attempts" />
+        <EvalKpi value={fmtAvg2(a.mcqAvgScore)} label="MCQ avg score" />
+        <EvalKpi value={fmtInt(a.openEndedGrades)} label="Open-ended grades" />
+        <EvalKpi value={fmtAvg2(a.openEndedAvg)} label="Open-ended avg" />
+        <EvalKpi value={fmtInt(a.verdictPass)} label="Verdict pass" />
+        <EvalKpi value={fmtInt(a.verdictFail)} label="Verdict fail" sub={a.verdictPartial != null ? `Partial: ${fmtInt(a.verdictPartial)}` : null} />
+      </div>
+      <span className="eval-label">Recommendations</span>
+      <div className="aiu-kpis aiu-kpis-2">
+        <EvalKpi value={fmtInt(rec.total)} label="Total generated" />
+      </div>
+      {rec.message && <p className="ops-muted">{rec.message}</p>}
+    </div>
   );
 }
 
@@ -560,9 +746,8 @@ export default function Admin() {
     dispatch(loadAdminSpaces());
     dispatch(loadAdminProjects());
     dispatch(loadAdminActivity({ days: 30, limit: 50 }));
-    dispatch(loadAdminLearning());
     dispatch(loadAdminJobs());
-    dispatch(loadAdminEvaluations());
+    dispatch(loadAdminEvaluations({ days: 30 }));
     dispatch(loadAdminUsage());
     dispatch(loadAdminHealth());
   }, [dispatch]);
@@ -611,9 +796,12 @@ export default function Admin() {
       {tab === 'Activity' && (
         <Activity data={admin.activity} onFilter={(p) => dispatch(loadAdminActivity(p))} />
       )}
-      {tab === 'Learning' && <Learning data={admin.learning} />}
-      {tab === 'AI Usage' && <AiUsage usage={admin.usage} />}
-      {tab === 'AI Evaluation' && <AiEvaluation evaluations={admin.evaluations} />}
+      {tab === 'AI Usage' && (
+        <AiUsage usage={admin.usage} onFilter={(p) => dispatch(loadAdminUsage(p))} />
+      )}
+      {tab === 'AI Evaluation' && (
+        <AiEvaluation evaluations={admin.evaluations} onFilter={(p) => dispatch(loadAdminEvaluations(p))} />
+      )}
       {tab === 'Processing' && <Processing summary={admin.jobSummary} jobs={admin.jobs} />}
       {tab === 'Health' && <Health health={admin.health} />}
     </motion.div>

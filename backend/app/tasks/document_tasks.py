@@ -26,6 +26,11 @@ def process_document_task(document_id: str) -> str:
 
         pages = parse_pdf(document.file_path)
 
+        # Idempotent retry: a previous attempt may have stored chunks before
+        # failing — clear them so re-processing never duplicates content.
+        db.query(DocumentChunk).filter(DocumentChunk.document_id == document.id).delete()
+        db.commit()
+
         splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
         embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001", google_api_key=settings.GOOGLE_API_KEY, output_dimensionality=768)
 

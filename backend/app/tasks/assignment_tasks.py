@@ -10,6 +10,7 @@ from app.db.session import SessionLocal
 import app.db.base  # noqa: F401
 from app.db.models.assessment import Assignment
 from app.tasks.celery_app import celery_app
+from app.services.ai_usage_service import track_ai_call
 
 
 def _run_graph(state: dict, thread_id: str) -> dict:
@@ -21,6 +22,7 @@ def _run_graph(state: dict, thread_id: str) -> dict:
 
 
 @celery_app.task(name="assignment.generate_batch", bind=True, max_retries=2)
+@track_ai_call("assignment_generation")
 def generate_assignment_task(self, assignment_id: str, num_questions: int = 5) -> str:
     logger.info(f"[assignment.task.generate] assignment={assignment_id} n={num_questions} entry")
     db = SessionLocal()
@@ -78,6 +80,7 @@ def generate_assignment_task(self, assignment_id: str, num_questions: int = 5) -
 
 
 @celery_app.task(name="assignment.evaluate_submission", bind=True, max_retries=2)
+@track_ai_call("assignment_evaluation")
 def evaluate_assignment_task(self, assignment_id: str, answers: dict) -> str:
     logger.info(f"[assignment.task.evaluate] assignment={assignment_id} entry")
     db = SessionLocal()

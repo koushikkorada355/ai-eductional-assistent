@@ -353,21 +353,42 @@ export default function Quiz({ spaceId, projectId }) {
           </div>
           <h3 className="font-display text-base font-bold text-ink">{q?.question_text}</h3>
           {q?.question_type === 'multiple_choice' ? (
-            <div className="flex flex-col gap-2">
-              {(q?.options || []).map((opt) => (
-                <motion.button
-                  key={opt}
-                  onClick={() => dispatch(setDraft({ id: q.id, value: opt }))}
-                  whileHover={{ scale: 1.005 }}
-                  whileTap={{ scale: 0.995 }}
-                  aria-pressed={draft === opt}
-                  className={`flex items-center gap-3 rounded-md border bg-surface px-3.5 py-3 text-left text-sm text-ink ${
-                    draft === opt ? 'border-primary bg-primary-soft' : 'border-line hover:border-primary'
-                  }`}
-                >
-                  {opt}
-                </motion.button>
-              ))}
+            <div className="flex flex-col gap-2" role="radiogroup" aria-label="Answer options">
+              {(q?.options || []).map((opt, oi) => {
+                const selected = draft === opt;
+                return (
+                  <motion.button
+                    key={opt}
+                    onClick={() => dispatch(setDraft({ id: q.id, value: opt }))}
+                    whileHover={{ scale: 1.005 }}
+                    whileTap={{ scale: 0.995 }}
+                    role="radio"
+                    aria-checked={selected}
+                    aria-pressed={selected}
+                    aria-label={`Option ${String.fromCharCode(65 + oi)}: ${opt}${selected ? ' (selected)' : ''}`}
+                    className={`flex items-center gap-3 rounded-md border px-3.5 py-3 text-left text-sm transition-colors ${
+                      selected
+                        ? 'border-primary bg-primary-soft font-semibold text-primary shadow-sm ring-1 ring-primary'
+                        : 'border-line bg-surface font-normal text-ink hover:border-primary'
+                    }`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold ${
+                        selected ? 'border-primary bg-primary text-white' : 'border-line bg-canvas text-muted'
+                      }`}
+                    >
+                      {String.fromCharCode(65 + oi)}
+                    </span>
+                    <span className="min-w-0 flex-1">{opt}</span>
+                    {selected && (
+                      <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-white [&>svg]:h-3.5 [&>svg]:w-3.5" aria-hidden="true">
+                        <IconCheck />
+                      </span>
+                    )}
+                  </motion.button>
+                );
+              })}
             </div>
           ) : (
             <textarea

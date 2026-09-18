@@ -16,9 +16,11 @@ from app.db.models.space import Space
 from app.ai.llm import get_llm
 from app.services.learning_service import (
     RECENT_MESSAGE_COUNT,
-    extract_user_name, parse_extraction, should_summarize, upsert_memory,
+    concept_vocabulary, extract_user_name, ground_candidate,
+    is_noise_message, parse_extraction, should_summarize, upsert_memory,
 )
 from app.tasks.celery_app import celery_app
+from app.services.ai_usage_service import track_ai_call
 
 
 def _owner(db, project_id):
@@ -28,6 +30,7 @@ def _owner(db, project_id):
 
 
 @celery_app.task(name="learning.summarize_conversation")
+@track_ai_call("summarization")
 def summarize_conversation_task(chat_session_id: str) -> str:
     db = SessionLocal()
     try:
@@ -53,19 +56,29 @@ def summarize_conversation_task(chat_session_id: str) -> str:
             new_since = len(messages)
         if not should_summarize(len(messages), new_since):
             return "skipped:too-short"
-        # Compress everything except the recent verbatim tail.
+        # Compress everything except the recent verbatim tail. Noise first:
+        # greetings, small-talk, and drill placeholder bubbles carry no study
+        # content and must never enter the summary.
         older = messages[: max(0, len(messages) - RECENT_MESSAGE_COUNT)]
         if not older:
             return "skipped:too-short"
+        kept = [m for m in older[-30:] if not is_noise_message(m.content or "")]
+        if not kept:
+            return "skipped:nothing-material"
         transcript = "\n".join(
-            f"{m.role}: {(m.content or '')[:500]}" for m in older[-30:]
+            f"{m.role}: {(m.content or '')[:500]}" for m in kept
         )
+        concept_names = [c.name for c in
+                         db.query(Concept).filter(Concept.project_id == session.project_id).all()][:30]
         llm = get_llm()
         res = llm.invoke([
             SystemMessage(content=(
                 "Summarize this tutoring conversation for continuity in 4-8 sentences. "
                 "Preserve: current learning topic, concepts discussed, the learner's "
                 "misunderstandings, explanations already given, unresolved questions. "
+                "Summarize ONLY content about the learner's study materials"
+                + (f" (known material topics: {', '.join(concept_names)})" if concept_names else "")
+                + ". Never preserve off-topic or unrelated questions. "
                 "Drop greetings, thanks, and repetition."
                 + (f"\n\nPrevious summary to update:\n{row.summary}" if row else "")
             )),
@@ -94,6 +107,7 @@ def summarize_conversation_task(chat_session_id: str) -> str:
 
 
 @celery_app.task(name="learning.extract_context")
+@track_ai_call("summarization")
 def extract_learning_context_task(chat_session_id: str, user_message_id: str) -> str:
     db = SessionLocal()
     try:
@@ -111,6 +125,10 @@ def extract_learning_context_task(chat_session_id: str, user_message_id: str) ->
             return "skipped:bad-id"
         if user_msg is None or user_msg.role != "user":
             return "skipped:no-message"
+        # Small-talk and drill placeholder bubbles carry no study content:
+        # skip extraction entirely (also saves the LLM call).
+        if is_noise_message(user_msg.content or ""):
+            return "skipped:small-talk"
         assistant_msg = (
             db.query(Message)
             .filter(Message.chat_session_id == session.id,
@@ -136,6 +154,7 @@ def extract_learning_context_task(chat_session_id: str, user_message_id: str) ->
                 source_id=user_msg.id,
             ))
         llm = get_llm()
+        known_topics = [c.name for c in db.query(Concept).filter(Concept.project_id == project.id).all()][:30]
         res = llm.invoke([
             SystemMessage(content=(
                 "Extract durable learner context from this tutoring exchange. "
@@ -143,6 +162,9 @@ def extract_learning_context_task(chat_session_id: str, user_message_id: str) ->
                 '[{"type": "weakness", "concept_name": "recursion", "content": "...", "confidence": 0.8}] '
                 "or null when nothing is worth persisting. Allowed types: goal, preference, "
                 "strength, weakness, repeated_mistake, tutor_context, user_fact. "
+                "Only extract content about the learner's study materials"
+                + (f" (known material topics: {', '.join(known_topics)})" if known_topics else "")
+                + ". Never persist unrelated or off-topic questions or topics. "
                 "Rules: persist goals, learning preferences, evident strengths/weaknesses, "
                 "repeated mistakes, AND the user's name (type user_fact, content like "
                 "\"User's name is X\") whenever they introduce themselves. "
@@ -155,13 +177,24 @@ def extract_learning_context_task(chat_session_id: str, user_message_id: str) ->
         candidates = parse_extraction(res.content)
         concepts = db.query(Concept).filter(Concept.project_id == project.id).all()
         by_name = {c.name.lower(): c for c in concepts}
+        vocab = concept_vocabulary([c.name for c in concepts])
 
         for cand in candidates:
-            concept_id = None
-            if cand["concept_name"]:
-                exact = by_name.get(cand["concept_name"].lower())
-                if exact:
-                    concept_id = exact.id
+            # Gate everything but names: each row must tie to the materials.
+            if cand["type"] != "user_fact":
+                concept_id, keep = ground_candidate(
+                    cand["concept_name"], cand["content"], by_name, vocab)
+                if not keep:
+                    logger.info(
+                        "[learning.extract] dropped ungrounded "
+                        f"{cand['type']}: {(cand['content'] or '')[:60]}")
+                    continue
+            else:
+                concept_id = None
+                if cand["concept_name"]:
+                    exact = by_name.get(cand["concept_name"].lower())
+                    if exact:
+                        concept_id = exact.id
             results.append(upsert_memory(
                 db, user_id=user_id, project_id=project.id,
                 type=cand["type"], concept_id=concept_id,

@@ -24,6 +24,12 @@ redis_data/
 .vscode/
 *.swp
 
+# Local databases / coverage
+*.sqlite3
+*.sqlite
+htmlcov/
+.coverage
+
 # Local git backup - never commit
 .git-corrupted/
 
