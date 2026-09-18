@@ -36,9 +36,15 @@ async def lifespan(app: FastAPI):
     for attempt in range(10):
         try:
             from sqlalchemy import text
-            with engine.connect() as conn:
-                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-                conn.commit()
+            # Neon: enable pgvector once in the Neon dashboard; this is
+            # best-effort so pooled URLs (pgbouncer) that reject DDL never
+            # crash the single Railway container on boot.
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                    conn.commit()
+            except Exception as _ext_e:
+                logger.warning(f"pgvector extension ensure skipped: {_ext_e} (enable pgvector in Neon dashboard)")
             Base.metadata.create_all(bind=engine)
             # Idempotent migrations for existing deployments (create_all only creates new tables)
             with engine.connect() as conn:

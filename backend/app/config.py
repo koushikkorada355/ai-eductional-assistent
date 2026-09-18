@@ -5,8 +5,20 @@ from loguru import logger
 
 
 class Settings(BaseSettings):
-    # PostgreSQL / Neon
+    # PostgreSQL / Neon (single Railway container talks to hosted Neon).
+    # Accepts Neon/Railway variants: postgres:// -> postgresql://,
+    # keeps ?sslmode=require. Stripped so copy-paste stays safe.
     DATABASE_URL: str
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _normalize_db_url(cls, v):
+        if isinstance(v, str):
+            v = v.strip().strip('"').strip("'")
+            if v.startswith("postgres://"):
+                v = "postgresql://" + v[len("postgres://"):]
+            return v
+        return v
 
     # JWT
     SECRET_KEY: str = Field(

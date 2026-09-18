@@ -7,8 +7,11 @@ services:
   backend:
     build: ./backend
 
-    # Starts FastAPI and Celery in the same container
-    command: sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000 & celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=1 & wait"
+    # Single-server parity with prod (root Dockerfile -> start-single.sh):
+    # FastAPI + Celery worker in ONE container sharing one filesystem.
+    # The supervisor exits (and compose restarts us) if EITHER child dies,
+    # so a dead worker can never sit silent while uploads pile in 'queued'.
+    command: sh ./start-single.sh
 
     ports:
       - "8000:8000"

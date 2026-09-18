@@ -1,17 +1,18 @@
 #!/bin/sh
 # Single-server production start: FastAPI web + Celery worker in ONE container.
 #
-# Why: Render has no shared disk between services, so the split web/worker
-# setup used on Railway/docker-compose (shared /data/uploads volume) cannot
-# work there. One container = web and worker share the same filesystem, so
-# uploads written by web are always visible to the worker.
+# Why: Railway volumes are per-service (and Render has no shared disk between
+# services), so a split web/worker setup with a shared /data/uploads volume
+# cannot work there. One container = web and worker share the same filesystem,
+# so uploads written by web are always visible to the worker. Postgres lives
+# in Neon (DATABASE_URL); Redis is the Railway Redis plugin (REDIS_URL).
 #
-# - Honors $PORT (Render injects it; defaults to 8000 for local runs).
+# - Honors $PORT (Railway/Render inject it; defaults to 8000 for local runs).
 # - Worker runs with --concurrency=1 (small instances; each prefork child
 #   duplicates interpreter memory from langchain/torch imports).
-# - All logs go to stdout (Render keeps only stdout/stderr).
+# - All logs go to stdout (Railway/Render keep only stdout/stderr).
 # - If EITHER process dies, the other is stopped and the container exits
-#   non-zero so Render restarts it. In-flight jobs requeue via acks_late.
+#   non-zero so Railway/Render restarts it. In-flight jobs requeue via acks_late.
 set -eu
 
 export C_FORCE_ROOT="${C_FORCE_ROOT:-true}"
@@ -27,7 +28,7 @@ celery -A app.tasks.celery_app.celery_app worker --loglevel="${CELERY_LOGLEVEL}"
 WORKER_PID=$!
 
 echo "[single] starting web on port ${PORT}..."
-# Foreground child: Render tracks the container, not a specific port process.
+# Foreground child: Railway/Render track the container, not a specific port process.
 uvicorn app.main:app --host 0.0.0.0 --port "${PORT}" &
 WEB_PID=$!
 
@@ -42,11 +43,11 @@ _shutdown() {
 trap _shutdown TERM INT
 
 # Supervisor loop: if either child exits, stop the other and exit non-zero
-# so Render restarts the container (jobs requeue via acks_late).
+# so Railway/Render restart the container (jobs requeue via acks_late).
 while kill -0 "$WORKER_PID" 2>/dev/null && kill -0 "$WEB_PID" 2>/dev/null; do
   sleep 5
 done
 
-echo "[single] a child exited (worker alive: $(kill -0 "$WORKER_PID" 2>/dev/null && echo yes || echo no), web alive: $(kill -0 "$WEB_PID" 2>/dev/null && echo yes || echo no)) — shutting down so Render restarts us"
+echo "[single] a child exited (worker alive: $(kill -0 "$WORKER_PID" 2>/dev/null && echo yes || echo no), web alive: $(kill -0 "$WEB_PID" 2>/dev/null && echo yes || echo no)) — shutting down so Railway/Render restart us"
 _shutdown
 exit 1
