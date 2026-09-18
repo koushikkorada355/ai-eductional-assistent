@@ -150,17 +150,52 @@ def _process_inline(document_id: str) -> str:
         return f"failed:{e}"
 
 
-def _dispatch_or_process_inline(db: Session, doc: Document) -> None:
+def _workers_alive(timeout: float = 1.5) -> bool | None:
+    """True if ≥1 worker replied, False if broker ok but none replied, None if unknown.
+
+    Short timeout so Retry stays snappy. Never raises.
+    """
+    try:
+        from app.tasks.celery_app import refresh_broker_from_env, celery_app
+
+        try:
+            refresh_broker_from_env()
+        except Exception:
+            pass
+        ping = celery_app.control.ping(timeout=timeout)
+        if ping:
+            return True
+        return False
+    except Exception as e:
+        logger.warning(f"Worker ping skipped: {e}")
+        return None
+
+
+def _dispatch_or_process_inline(db: Session, doc: Document, check_workers: bool = False) -> None:
     """Prefer async Celery; fall back to inline so docs never stay queued forever.
 
-    On async success: doc stays queued and worker will mark ready/failed.
+    On async success: doc stays queued and worker will mark ready/failed —
+    unless check_workers=True (Retry path) and no worker replies, in which
+    case inline runs immediately instead of stranding the doc.
     On async failure: run inline on web (file is local here). The task itself
     sets doc.status/error, so just refresh the row afterwards.
     """
     dispatch_err = _dispatch_process_document(str(doc.id))
     if not dispatch_err:
-        return
-    logger.warning(f"Async dispatch failed for {doc.id}, trying inline: {dispatch_err}")
+        if not check_workers:
+            return
+        alive = _workers_alive()
+        if alive is not False:
+            # Worker alive (True) or unknown (None, e.g. ping error) — leave
+            # queued; worker or a later Retry will finish it.
+            return
+        dispatch_err = (
+            "Redis is reachable but no workers replied (worker service not running, "
+            "scaled to 0, crashed, or on a different REDIS_URL). Running inline instead."
+        )
+        logger.warning(f"No workers for {doc.id}, trying inline: {dispatch_err}")
+    else:
+        logger.warning(f"Async dispatch failed for {doc.id}, trying inline: {dispatch_err}")
     try:
         result = _process_inline(str(doc.id))
     except Exception as e:
@@ -185,8 +220,8 @@ def _dispatch_or_process_inline(db: Session, doc: Document) -> None:
             doc.error = (
                 "Upload saved but background worker is unreachable "
                 f"(queue error: {dispatch_err}; inline result: {result[:200]}). "
-                "Fix Redis (same REDIS_URL on web+worker, restart web) then Retry. "
-                f"Details: GET /health/queue."
+                "Check: worker service Running (not stopped/scaled-to-0/crashed), same REDIS_URL "
+                "on web+worker, restart web, then Retry. Details: GET /health/queue."
             )
             try:
                 db.commit()
@@ -271,7 +306,9 @@ def retry_document(
         doc.error = None
     db.commit()
     db.refresh(doc)
-    _dispatch_or_process_inline(db, doc)
+    # Retry is user-initiated: also go inline when no worker is listening,
+    # so a stopped worker service can't strand docs in queued silently.
+    _dispatch_or_process_inline(db, doc, check_workers=True)
     return _with_stats(db, doc)
 
 

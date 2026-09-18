@@ -128,12 +128,16 @@ celery_app.conf.update(
     task_ignore_result=True,
     result_extended=False,
     result_expires=3600,
-    # Fail fast with a clear log instead of hanging the request for minutes
-    # when Redis is unreachable (wrong host/password, service down).
+    # Web publish path fails fast on its own: materials.py pings Redis (3s)
+    # before apply_async, and .delay()/apply_async default to retry=False
+    # (single attempt, raises immediately). So the WORKER may retry the
+    # broker forever here without making web requests hang: a boot race
+    # (Redis not up yet) or a redeploy must never exit the worker as
+    # "Crashed" — previously max_retries=3 killed it after ~seconds.
     broker_connection_timeout=5,
     broker_connection_retry=True,
     broker_connection_retry_on_startup=True,
-    broker_connection_max_retries=3,
+    broker_connection_max_retries=None,
     redis_socket_timeout=5,
     redis_socket_connect_timeout=5,
     redis_retry_on_timeout=True,

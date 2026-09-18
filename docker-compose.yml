@@ -97,7 +97,11 @@ services:
   worker:
     build: ./backend
 
-    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info
+    # concurrency=1: Railway trial instances are small and each prefork child
+    # duplicates interpreter memory (langchain/torch imports). Same start
+    # command (plus --concurrency=1) should be set as the Railway worker
+    # Start Command.
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=1
 
     volumes:
       - ./backend:/code

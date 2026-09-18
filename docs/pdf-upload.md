@@ -46,8 +46,8 @@ Where to look: Materials list shows `error` under failed/queued docs; open **Vie
 2. `REDIS_URL is not set` → set same internal URL on web + worker, restart **web** (Celery caches it at import), Retry.
 3. `does not resolve` + `redis://redis` → local hostname in prod. Copy Redis service **internal** URL into both, restart web, Retry.
 4. `auth failed` → copy full URL with password into both, restart web, Retry.
-5. `Redis ok but no workers` → worker service not Running or on different `REDIS_URL`. Fix + restart worker, Retry.
-6. Uploads prefer async Celery but fall back to inline in web (`_dispatch_or_process_inline`), so a dead Redis slows uploads (~10–30s) instead of stranding them — still fix Redis for speed.
+5. `Redis ok but no workers` → worker service not Running (stopped, scaled to 0, crashed at boot, or on a different `REDIS_URL`). Start/scale it, fix its env, restart worker. Meanwhile **Retry** on a stuck doc processes it inline on web (~10–30s) so it still becomes `ready` instead of staying `queued`.
+6. Uploads prefer async Celery but fall back to inline in web (`_dispatch_or_process_inline`), so a dead Redis slows uploads (~10–30s) instead of stranding them — still fix Redis for speed. Retry additionally checks for listening workers and goes inline immediately when none reply.
 
 ## Limits & notes
 

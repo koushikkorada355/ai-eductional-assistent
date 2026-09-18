@@ -11,6 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr \
 
 COPY . .
 
+# Celery refuses root with a noisy SecurityWarning (harmless in Docker but
+# buries the real crash line in Railway logs). Containers run as root by
+# default — silence it explicitly.
+ENV C_FORCE_ROOT=true
+
 EXPOSE 8000
 
 # Prod start: honor Railway's $PORT, no --reload (dev only).
