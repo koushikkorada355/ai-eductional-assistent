@@ -222,7 +222,7 @@ async def queue_health():
             "status": "unavailable",
             "redis": {"status": "unavailable", "detail": f"{type(e).__name__}: {e} ({host_label})"},
             "workers": {"status": "unknown", "detail": "skipped, Redis unreachable"},
-            "hint": "Copy the Redis service internal URL into BOTH web and worker env, then restart WEB (Celery caches it).",
+            "hint": "Set the same REDIS_URL on web and worker (Render Blueprint wires it from the Key Value service), then restart WEB (Celery caches it).",
         }
     try:
         from app.tasks.celery_app import celery_app
@@ -233,7 +233,16 @@ async def queue_health():
             workers: dict = {"status": "healthy", "detail": f"{len(ping)} worker(s): {', '.join(names)}"}
             status = "healthy"
         else:
-            workers = {"status": "degraded", "detail": "Redis ok but no workers replied — is the worker service Running on the same REDIS_URL?"}
+            workers = {
+                "status": "degraded",
+                "detail": (
+                    "Redis ok but no workers replied — uploads will sit in 'queued' forever. "
+                    "Render single-container: the service must build the ROOT Dockerfile "
+                    "(leave 'Dockerfile Path' empty) with NO custom Start/Docker Command override, "
+                    "and deploy logs must show '[single] starting celery worker' + '[WORKER] ready'. "
+                    "Split web+worker setup: worker must be Running on the SAME REDIS_URL."
+                ),
+            }
             status = "degraded"
     except Exception as e:
         workers = {"status": "degraded", "detail": f"{type(e).__name__}: {e}"}

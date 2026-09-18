@@ -31,8 +31,15 @@ def _rss_mb() -> str:
 
 
 def _fail(db, document, reason: str, tag: str) -> str:
-    """Mark document failed with a UI-visible reason (best-effort, never raises)."""
-    short = (reason or "Processing failed")[:500]
+    """Mark document failed with a UI-visible reason (best-effort, never raises).
+
+    The full raw `reason` stays in the SERVER logs only; clients get the
+    sanitized form via public_error (no URLs, paths, keys, or API blobs).
+    """
+    from app.utils.user_errors import public_error
+
+    logger.warning(f"{tag} raw failure (server-side only): {(reason or '')[:1000]}")
+    short = public_error(reason, default="Processing failed")
     try:
         document.status = "failed"
         if hasattr(document, "error"):

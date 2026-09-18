@@ -1,6 +1,4 @@
-# Architecture — AI Study Companion
-
-
+        
 ---
 
 ## A. Project Overview
@@ -138,14 +136,6 @@ Key fields: `User(id, email unique, hashed_password, name, role, is_active)`; `S
 
 
 
-## G. Project Data Isolation
-
-
-
-Enforcement points: `app/api/deps.py:38-98` (all ownership deps), conversation guard `tutor.py:119-130`, document guard `materials.py:38-58`, retrieval filter `tutor_nodes.py:360-366` + `quiz_nodes.py:49-55`, summary scoping `tutor_nodes.py:485-496`. Cross-user access returns 403/404; no endpoint trusts a client-supplied user ID.
-
----
-
 ## H. Document Processing Architecture
 
 Actual pipeline (`materials.py:101-178` → `document_tasks.py:27-103` → `concept_tasks.py:16-95`):
@@ -183,37 +173,6 @@ flowchart TD
 ```
 
 Insufficient evidence: `grade_documents` LLM yes/no gate fails open on provider error; `route_evidence` sends weak evidence to `reject_answer` (fixed message) except conversation-action turns; `generate_answer` prompt repeats the exact refusal sentence as last resort (`tutor_nodes.py:714-720`). Quiz generation reuses the same retrieval (`quiz_nodes._rag_context`, top-5, ≤6000 chars).
-
----
-
-## J. AI Tutor Architecture
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant F as Frontend (AITutor.jsx)
-    participant B as Backend (tutor.py)
-    participant G as LangGraph (tutor_app)
-    participant R as pgvector Retrieval
-    participant L as Mercury LLM
-    participant F2 as Frontend render
-    U->>F: question (+ optional quick action)
-    F->>B: POST .../conversations/:cid/tutor
-    B->>B: load history → HumanMessage/AIMessage
-    B->>G: robust_ainvoke(thread_id=conversation)
-    G->>G: detect_intent to general or knowledge
-    G->>R: retrieve_context (top-5, project-filtered)
-    G->>G: retrieve_learning_context + compress_history + grade_documents
-    G->>L: generate_answer (context + memory + assessment)
-    L-->>G: markdown + [Source: Page N]
-    G->>G: _build_citations + _suggest_followups
-    G-->>B: final_answer, citations, suggested_questions
-    B->>B: persist messages, touch session, fire summarize/extract tasks
-    B-->>F: TutorResponse
-    F->>F2: markdown + SourcesPanel + chips
-```
-
-Turn composition (`generate_answer`, `tutor_nodes.py:607-768`): `current conversation (tail ≤6 + compressed bullets) + relevant project knowledge (top-5 chunks) + relevant learning context (summary, memory lines, assessment stats, user name)`. Quick actions (`summarize/deep_dive/create_flashcards/practice`) reuse the same pipeline — only a response directive (`action_hint`) changes; `practice` additionally filters history to material questions and never emits mastery signals. Suggested follow-ups are generated strictly from concepts + conversation (never raw chunks) with length/novelty/diversity/vocabulary gates (`tutor_nodes.py:89-205`).
 
 ---
 
@@ -405,49 +364,13 @@ Concrete chains: `Material Upload → documents.process → extract_concepts_tas
 
 ---
 
-## R. Analytics Architecture
-
-Project analytics (`GET /spaces/:sid/projects/:pid/analytics`): activity counts, per-concept mastery + growth (`concept_growth`), project growth + carry-forward series (`project_series`), inline recommendations (weakest concepts, recent mistakes, unread materials), AI activity for the project. Global (`GET /analytics/overview`): cross-project/space totals, trends, attention lists. Admin adds users/spaces/projects/activity/learning/jobs/evaluations/ai-usage/health (`GET /admin/*`, `admin.py:170-906`).
-
-```mermaid
-flowchart TD
-    UA[User activity<br/>upload, chat, quiz, mastery change] --> EV[emit_event → LearningEvent<br/>+ MasteryHistory snapshot]
-    EV --> DB[(PostgreSQL rows)]
-    DB --> AG[analytics_service pure math<br/>trend_for, concept/project_growth, series]
-    AG --> PA[Project analytics response]
-    AG --> GA[Global analytics response]
-    AG --> AD[Admin aggregates]
-    PA --> UI[Analytics tabs + Home + Admin UI]
-```
-
-Actual event vocabulary (`event_service.py:14-21`): `user_registered, space_created, project_created, material_uploaded, document_processed, quiz_completed, assessment_completed`. Activity feeds are derived cross-table scans (no separate event bus).
-
----
-
-## S. Security Architecture
-
-- **Authentication:** register/login → bcrypt hash (72-byte truncate) → JWT HS256 Bearer, 7-day expiry (`core/security.py`, `config.py:20`); `HTTPBearer` guard per request (`deps.py:15-36`).
-- **Authorization:** ownership deps on every family (spaces, nested/flat projects, quizzes, conversations, documents, analytics, admin role gate). No client-supplied user IDs trusted.
-- **Input validation:** Pydantic schemas everywhere (email-validator, field limits, `SaveAnswerRequest` ≤5000 chars, quiz totals 1–10, concept-name regex `schemas/mastery.py:9-22`, strict LLM-JSON models).
-- **Project isolation:** §G enforcement; retrieval SQL-filtered; summaries re-scoped.
-- **Secure APIs/docs:** CORS allowlist (`localhost` + `FRONTEND_URL` + vercel/local regex); `/health` public; OpenAPI served by FastAPI.
-- **Document handling:** PDF type check + hash/name dedupe; 1-MB chunked writes; `uploads/` + `*.pdf` docker-ignored so dev files never ship. Known gap: filename not `basename`-sanitized.
-- **Secrets:** `.env` git-ignored; `config.py` fail-fast on missing `DATABASE_URL`/`SECRET_KEY`; Railway/Vercel env vars; never log secrets.
-- **AI security:** no tool-calling layer (AI never invokes app capabilities — prompt-shaping + JSON validation only); retrieved/uploaded content treated as **data**: generation prompt forbids verbatim copy and outside-knowledge answers; evidence gate + citation matching block fabrication; blank-answer=0 guard; suggestion vocabulary gates; name/memory writes grounded via `upsert_memory` validation. Known gaps: no rate limiting, trivial default admin seed creds, 7-day JWT without refresh.
-
----
-
 ## T. Observability
 
-Implemented (`ai_usage_service.py` + `admin.py:603-906` + loguru):
+LangSmith is integrated for LLM tracing and evaluation visibility. The project also exposes AI usage information in the **Admin Dashboard → AI Usage / AI Evaluation**.
 
-- Per LLM call: provider, model, prompt/completion/total tokens (from provider `token_usage`/`usage_metadata`), latency ms, success/error — aggregated per operation into one `AIUsage` row.
-- Cost estimated from per-1M pricing table with `(0.30, 0.60)` fallback (Mercury uses fallback — rough).
-- Retrieval debuggability: retrieved chunk cards + citations persisted on `Message`; zero-context rate derived in evaluations.
-- Background failures: terminal `ready/failed/skipped:*` strings + Admin → Jobs status derivation.
-- Logs: `[tutor.intent]`, `[quiz.batch_task]`, `[mastery.quiz]`, `[concepts.extract]` etc. via loguru.
-
-Engineer runbook: slow answer → check `AIUsage.latency_ms` by feature/model + `compress_history`/`retrieve_learning_context` warnings in logs; poor retrieval → inspect `Message.citations` (empty = zero-context) and chunk count for the project; which model → `AIUsage.provider/model`; doc failure → `Document.status=failed` + worker logs (`parse_pdf`/embedding errors); workflow failure → Celery retry strings + `quiz.status=failed`; cost → `AIUsage.cost_usd` sums in Admin → AI Usage.
+- LangSmith tracks LLM workflow execution and provides trace-level visibility.
+- The Admin Dashboard shows AI usage such as provider, model, latency, tokens, cost, and success/error status.
+- Background failures and document/quiz workflow status are surfaced in the Admin Dashboard.
 
 ---
 
@@ -503,3 +426,10 @@ Engineer runbook: slow answer → check `AIUsage.latency_ms` by feature/model + 
 | Table/diagram understanding | Text/OCR only; no structural extraction | Partial |
 | Streaming / caching / pagination | Not implemented (stated in README) | Not Implemented |
 
+---
+
+## Z. Final Summary
+
+AI Study Companion combines a React frontend, FastAPI backend, PostgreSQL with pgvector, LangChain, LangGraph, and Celery/Redis into a project-centric learning platform. Its core learning flow connects PDF ingestion and RAG with an AI Tutor, adaptive quizzes, assessment, concept mastery, persistent learning context, and growth analysis.
+
+The architecture is centered on grounded learning: project materials provide the retrieval context, LangGraph coordinates the AI workflows, and learner progress is persisted to support learning across sessions. LangSmith and the Admin Dashboard provide visibility into AI workflows and usage.

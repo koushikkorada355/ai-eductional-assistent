@@ -76,7 +76,9 @@ def generate_assignment_questions(state: dict) -> dict:
     except Exception as e:
         db.rollback()
         logger.error(f"[assignment.generate] assignment={assignment_id} failed: {e}")
-        return {"error": f"Failed to generate assignment: {e}"}
+        from app.utils.user_errors import public_error
+
+        return {"error": public_error(e, default="Could not generate assignment. Please try again.")}
     finally:
         db.close()
 
@@ -158,7 +160,9 @@ def grade_assignment_submission(state: dict) -> dict:
     except Exception as e:
         db.rollback()
         logger.error(f"[assignment.grade] assignment={assignment_id} failed: {e}")
-        return {"error": f"Failed to evaluate submission: {e}"}
+        from app.utils.user_errors import public_error
+
+        return {"error": public_error(e, default="Could not evaluate submission. Please try again.")}
     finally:
         db.close()
 

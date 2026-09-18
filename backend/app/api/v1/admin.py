@@ -142,7 +142,9 @@ def _check_redis() -> dict:
         client.ping()
         return {"status": "healthy", "detail": "PING ok"}
     except Exception as e:
-        return {"status": "unavailable", "detail": f"{type(e).__name__}: {e}"}
+        from app.utils.user_errors import short_admin_detail
+
+        return {"status": "unavailable", "detail": short_admin_detail(e)}
 
 
 def _check_workers() -> dict:
@@ -155,7 +157,9 @@ def _check_workers() -> dict:
             return {"status": "healthy", "detail": f"{len(ping)} worker(s): {', '.join(names)}"}
         return {"status": "degraded", "detail": "No workers replied to ping"}
     except Exception as e:
-        return {"status": "degraded", "detail": f"{type(e).__name__}: {e}"}
+        from app.utils.user_errors import short_admin_detail
+
+        return {"status": "degraded", "detail": short_admin_detail(e)}
 
 
 def _ai_providers() -> dict:
@@ -229,7 +233,9 @@ def _system_status(db: Session, docs=None) -> dict:
         db.execute(text("SELECT 1"))
         database = {"status": "healthy", "detail": "SELECT 1 ok"}
     except Exception as e:
-        database = {"status": "unavailable", "detail": f"{type(e).__name__}: {e}"}
+        from app.utils.user_errors import short_admin_detail
+
+        database = {"status": "unavailable", "detail": short_admin_detail(e)}
     docs = docs if docs is not None else db.query(Document).all()
     failed = sum(1 for d in docs if d.status == "failed")
     processing = sum(1 for d in docs if d.status in ("queued", "processing"))
@@ -948,7 +954,9 @@ def admin_health(admin: User = Depends(require_admin), db: Session = Depends(get
         db.execute(text("SELECT 1"))
         database = {"name": "PostgreSQL", "status": "healthy", "detail": "SELECT 1 ok"}
     except Exception as e:
-        database = {"name": "PostgreSQL", "status": "unavailable", "detail": f"{type(e).__name__}: {e}"}
+        from app.utils.user_errors import short_admin_detail
+
+        database = {"name": "PostgreSQL", "status": "unavailable", "detail": short_admin_detail(e)}
     redis = _check_redis()
     workers = _check_workers()
     providers = _ai_providers()

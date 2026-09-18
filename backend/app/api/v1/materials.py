@@ -23,9 +23,10 @@ router = APIRouter()
 def _get_upload_dir() -> str:
     """Absolute upload dir shared by web + worker.
 
-    Local dev: ./uploads (resolved absolute). Production (Railway): set
+    Local dev: ./uploads (resolved absolute). Split-service production: set
     UPLOAD_DIR=/data/uploads on BOTH web and worker and mount the SAME
     volume at /data/uploads, otherwise the worker can't see the file.
+    (Single-container Render needs no setup — same filesystem.)
     """
     raw = (getattr(settings, "UPLOAD_DIR", None) or os.getenv("UPLOAD_DIR", "uploads")).strip() or "uploads"
     path = os.path.abspath(raw)
@@ -42,7 +43,7 @@ def _max_upload_bytes() -> int:
 
 
 def _live_redis_url() -> str | None:
-    """Live URL: env wins so a just-changed Railway value is used immediately."""
+    """Live URL: env wins so a just-changed value is used immediately."""
     import os
 
     for candidate in (os.getenv("REDIS_URL"), getattr(settings, "REDIS_URL", None)):
@@ -70,33 +71,44 @@ def _redis_label(url: str | None = None) -> str:
 
 
 def _friendly_queue_error(e: Exception) -> str:
+    # Client-safe: host label only (no creds), NEVER the raw exception text
+    # (it can contain passwords/paths/provider blobs — those stay in the
+    # server logs, logged by the caller). Keep in sync with user_errors codes.
     raw = str(e).strip() or type(e).__name__
     redis = _redis_label()
     low = raw.lower()
     if "redis_url" in low and "not set" in low or redis == "<REDIS_URL unset>":
         return (
-            "REDIS_URL is not set on the web service. Set it (same value as worker) and restart web, then Retry."
+            "[E_CONN] Queue is not configured on the web service (REDIS_URL missing). "
+            "(Owner: set the same REDIS_URL as the worker, restart web, then Retry.)"
         )
     if "result store backend" in low or "must be restarted" in low:
         return (
-            f"Cannot reach Redis result store at {redis} ({raw[:160]}). "
-            "Check: 1) Railway Redis service is Running, 2) web + worker share the SAME internal REDIS_URL "
-            "(not redis://redis:6379/0 in prod), 3) restart WEB after changing env (Celery caches it), then Retry."
+            f"[E_CONN] Cannot reach the queue at {redis}. "
+            "(Owner: Redis Running? web+worker share the SAME REDIS_URL "
+            "(never redis://redis:6379/0 outside docker-compose)? restart WEB after env changes, then Retry.)"
         )
     if "name or service not known" in low or "temporary failure in name resolution" in low or "nodename nor servname" in low:
         return (
-            f"Redis host does not resolve ({redis}): {raw[:160]}. "
-            "On Railway use the Redis service internal URL on BOTH web and worker (local 'redis' hostname only works in docker-compose), then restart web and Retry."
+            f"[E_CONN] Queue host does not resolve ({redis}). "
+            "(Owner: use the Redis internal URL on BOTH web and worker — "
+            "the local 'redis' hostname only works in docker-compose — then restart web and Retry.)"
         )
     if "auth" in low or "password" in low or "noauth" in low:
         return (
-            f"Redis auth failed at {redis}: {raw[:160]}. Copy the full internal REDIS_URL (with password) from the Redis service into BOTH web and worker, restart web, then Retry."
+            f"[E_AI_AUTH] Queue refused credentials at {redis}. "
+            "(Owner: copy the FULL REDIS_URL with password into BOTH web and worker, restart web, then Retry.)"
         )
     if "refused" in low or "timed out" in low or "timeout" in low:
         return (
-            f"Redis unreachable at {redis}: {raw[:160]}. Check the Redis service is Running (not sleeping/crashed), then restart web and Retry."
+            f"[E_CONN] Queue unreachable at {redis}. "
+            "(Owner: Redis Running (not sleeping/crashed)? then restart web and Retry.)"
         )
-    return f"Queue error at {redis}: {raw[:200]}. Check Redis is Running, web+worker share the same REDIS_URL, restart web, then Retry."
+    return (
+        f"[E_CONN] Queue error at {redis}. "
+        "(Owner: Redis Running? web+worker share the same REDIS_URL? restart web, then Retry. "
+        "Raw error is in the server logs.)"
+    )
 
 
 def _dispatch_process_document(document_id: str) -> str | None:
@@ -125,7 +137,8 @@ def _dispatch_process_document(document_id: str) -> str | None:
         client.ping()
     except Exception as e:
         friendly = _friendly_queue_error(e)
-        logger.warning(f"[WEB dispatch|id={short}] redis PING failed, leaving queued: {friendly}")
+        # Raw stays server-side only; the client gets the coded message above.
+        logger.opt(exception=True).warning(f"[WEB dispatch|id={short}] redis PING failed, leaving queued: {e}")
         return friendly
     try:
         # ignore_result=True: status lives in Postgres, so dispatch must not
@@ -135,7 +148,7 @@ def _dispatch_process_document(document_id: str) -> str | None:
         return None
     except Exception as e:
         friendly = _friendly_queue_error(e)
-        logger.warning(f"[WEB dispatch|id={short}] enqueue failed: {friendly}")
+        logger.opt(exception=True).warning(f"[WEB dispatch|id={short}] enqueue failed: {e}")
         return friendly
 
 
@@ -149,8 +162,10 @@ def _process_inline(document_id: str) -> str:
     try:
         return process_document_task.run(str(document_id))
     except Exception as e:
-        logger.warning(f"Inline processing failed for {document_id}: {e}")
-        return f"failed:{e}"
+        from app.utils.user_errors import public_error
+
+        logger.opt(exception=True).warning(f"Inline processing failed for {document_id} (server-side): {e}")
+        return public_error(f"failed:{e}", default="Processing failed")
 
 
 def _workers_alive(timeout: float = 1.5) -> bool | None:
@@ -177,9 +192,11 @@ def _workers_alive(timeout: float = 1.5) -> bool | None:
 def _dispatch_or_process_inline(db: Session, doc: Document, check_workers: bool = False) -> None:
     """Prefer async Celery; fall back to inline so docs never stay queued forever.
 
-    On async success: doc stays queued and worker will mark ready/failed —
-    unless check_workers=True (Retry path) and no worker replies, in which
-    case inline runs immediately instead of stranding the doc.
+    On async success with check_workers=False (fire-and-forget): doc stays
+    queued for the worker. With check_workers=True (upload + Retry paths):
+    if no worker replies to ping, run inline immediately instead of
+    stranding the doc — a missing/deaf prod worker then degrades to slower
+    inline processing instead of 'queued' forever.
     On async failure: run inline on web (file is local here). The task itself
     sets doc.status/error, so just refresh the row afterwards.
     """
@@ -193,8 +210,8 @@ def _dispatch_or_process_inline(db: Session, doc: Document, check_workers: bool 
             # queued; worker or a later Retry will finish it.
             return
         dispatch_err = (
-            "Redis is reachable but no workers replied (worker service not running, "
-            "scaled to 0, crashed, or on a different REDIS_URL). Running inline instead."
+            "[E_CONN] Redis is reachable but no worker replied (worker not running, "
+            "crashed, scaled to 0, or on a different REDIS_URL). Running inline instead."
         )
         logger.warning(f"No workers for {doc.id}, trying inline: {dispatch_err}")
     else:
@@ -202,7 +219,10 @@ def _dispatch_or_process_inline(db: Session, doc: Document, check_workers: bool 
     try:
         result = _process_inline(str(doc.id))
     except Exception as e:
-        result = f"failed:{e}"
+        from app.utils.user_errors import public_error
+
+        logger.opt(exception=True).warning(f"Inline fallback crashed for {doc.id} (server-side): {e}")
+        result = public_error(f"failed:{e}", default="Processing failed")
     try:
         db.expire_all()
         refreshed = db.query(Document).filter(Document.id == doc.id).first()
@@ -214,17 +234,24 @@ def _dispatch_or_process_inline(db: Session, doc: Document, check_workers: bool 
             doc.file_path = refreshed.file_path
     except Exception as e:
         logger.warning(f"Could not refresh {doc.id} after inline run: {e}")
-    # If inline also left it queued/failed-with-queue-error, explain both.
+    # If inline also left it queued/failed-with-queue-error, explain both —
+    # client-safe only (host label + coded error; raws stay in server logs).
     current_err = getattr(doc, "error", None)
     if getattr(doc, "status", None) == "queued" or (
         getattr(doc, "status", None) == "failed" and current_err and "worker is unreachable" in current_err
     ):
+        from app.utils.user_errors import public_error
+
+        safe_inline = public_error(str(result or ""), default="Processing failed")
         if hasattr(doc, "error"):
             doc.error = (
-                "Upload saved but background worker is unreachable "
-                f"(queue error: {dispatch_err}; inline result: {result[:200]}). "
-                "Check: worker service Running (not stopped/scaled-to-0/crashed), same REDIS_URL "
-                "on web+worker, restart web, then Retry. Details: GET /health/queue."
+                "Upload saved but the background worker is unreachable "
+                f"(queue: {dispatch_err}; inline: {safe_inline}). "
+                "Owner: is the worker actually running on the same REDIS_URL? "
+                "On Render single-container: Dashboard -> service must build the ROOT Dockerfile "
+                "(leave 'Dockerfile Path' empty) with no custom Start Command override, "
+                "and deploy logs must show '[single] starting celery worker' + '[WORKER] ready'. "
+                "Details: GET /health/queue."
             )
             try:
                 db.commit()
@@ -337,7 +364,9 @@ def delete_document(
 
 
 @router.post("/{project_id}/upload-pdf", response_model=DocumentOut)
-async def upload_pdf(
+async def upload_pdf(  # stays async (streams UploadFile); the blocking
+    # dispatch/inline fallback below runs in a thread via to_thread so it
+    # can never wedge the event loop for all users.
     project_id: uuid.UUID,
     file: UploadFile = File(...),
     project: Project = Depends(get_owned_project),
@@ -356,7 +385,7 @@ async def upload_pdf(
         upload_dir = _get_upload_dir()
     except OSError as e:
         logger.error(f"Upload dir unavailable: {e}")
-        raise HTTPException(status_code=500, detail=f"Upload storage unavailable: {e}")
+        raise HTTPException(status_code=500, detail="Upload storage unavailable. Please try again.")
 
     max_bytes = _max_upload_bytes()
     safe_name = f"{uuid.uuid4()}_{safe_display_name}"
@@ -390,7 +419,7 @@ async def upload_pdf(
         raise
     except OSError as e:
         logger.error(f"Failed writing upload {file_path}: {e}")
-        raise HTTPException(status_code=500, detail=f"Could not save upload: {e}")
+        raise HTTPException(status_code=500, detail="Could not save upload. Please try again.")
 
     if total == 0:
         try:
@@ -412,12 +441,13 @@ async def upload_pdf(
     except HTTPException:
         raise
     except OSError as e:
+        logger.error(f"Could not verify upload {file_path}: {e}")
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)
         except OSError:
             pass
-        raise HTTPException(status_code=500, detail=f"Could not verify upload: {e}")
+        raise HTTPException(status_code=500, detail="Could not verify upload. Please re-upload the file.")
 
     file_hash = sha.hexdigest()
 
@@ -469,10 +499,15 @@ async def upload_pdf(
                event_key=f"document:{document.id}:uploaded")
 
     # RAG pipeline: parse PDF -> chunk -> Gemini embeddings -> pgvector.
-    # Prefer async Celery; fall back to inline on web so a dead Redis/worker
-    # can never strand docs in 'queued' (web just wrote the file locally,
-    # so inline also dodges the shared-volume problem).
-    _dispatch_or_process_inline(db, document)
+    # Prefer async Celery; verify a worker is listening (check_workers=True)
+    # and fall back to inline on web so a dead/missing prod worker degrades
+    # to slower inline processing instead of stranding docs in 'queued'
+    # (web just wrote the file locally, so inline also dodges the
+    # shared-volume problem). Blocking dispatch/inline runs in a thread so
+    # the event loop stays free for other requests.
+    import asyncio as _asyncio
+
+    await _asyncio.to_thread(_dispatch_or_process_inline, db, document, True)
 
     # COLIVARA ALTERNATIVE - COMMENTED OUT (revert by swapping these blocks)
     # Visual RAG indexing via ColiVara (one collection per project).

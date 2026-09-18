@@ -7,7 +7,9 @@ class DocumentOut(BaseModel):
     id: UUID
     project_id: UUID
     file_name: str
-    file_path: str
+    # NOTE: file_path is intentionally NOT exposed — it is an absolute
+    # server-side path (/data/uploads/... in prod) and must never reach
+    # clients. Use file_name + the download/evidence endpoints instead.
     status: str
     created_at: datetime
     # Failure reason when status == "failed" (None otherwise).

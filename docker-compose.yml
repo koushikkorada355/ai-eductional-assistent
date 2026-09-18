@@ -1,67 +1,30 @@
 services:
 
   # ============================================================
-  # LOCAL POSTGRESQL DATABASE
-  # Commented out because we are currently using Neon PostgreSQL.
-  # Uncomment this entire section if you want to switch back
-  # to local PostgreSQL.
-  # ============================================================
-
-  # db:
-  #   image: pgvector/pgvector:pg15
-  #
-  #   env_file:
-  #     - .env
-  #
-  #   ports:
-  #     - "5433:5432"
-  #
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-  #
-  #   healthcheck:
-  #     test:
-  #       [
-  #         "CMD-SHELL",
-  #         "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-study_companion}"
-  #       ]
-  #     interval: 2s
-  #     timeout: 2s
-  #     retries: 15
-  #     start_period: 5s
-
-
-  # ============================================================
-  # FASTAPI BACKEND
+  # FASTAPI + CELERY
   # ============================================================
 
   backend:
     build: ./backend
 
-    # Local dev hot-reload. Railway uses the Dockerfile CMD (prod, $PORT).
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Starts FastAPI and Celery in the same container
+    command: sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000 & celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=1 & wait"
 
     ports:
       - "8000:8000"
 
     volumes:
       - ./backend:/code
-      # Shared upload storage: mimics prod where web + worker must mount
-      # the SAME volume (Railway: /data/uploads on both + UPLOAD_DIR set).
       - uploads_data:/code/uploads
 
     env_file:
       - .env
 
-    # Public DNS required: some networks (college/hotel WiFi) return
-    # REFUSED for *.neon.tech on the default resolver, breaking Neon.
     dns:
       - 8.8.8.8
       - 1.1.1.1
 
     depends_on:
-      # PostgreSQL is currently Neon, so we don't depend on
-      # the local "db" container.
       redis:
         condition: service_healthy
 
@@ -90,74 +53,10 @@ services:
     restart: unless-stopped
 
 
-  # ============================================================
-  # CELERY WORKER
-  # ============================================================
-
-  worker:
-    build: ./backend
-
-    # concurrency=1: Railway trial instances are small and each prefork child
-    # duplicates interpreter memory (langchain/torch imports). Same start
-    # command (plus --concurrency=1) should be set as the Railway worker
-    # Start Command.
-    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=1
-
-    volumes:
-      - ./backend:/code
-      # Must match backend: worker reads uploads from the same shared dir.
-      - uploads_data:/code/uploads
-
-    env_file:
-      - .env
-
-    # Same public-DNS fix as backend (worker also talks to Neon).
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-
-    depends_on:
-      redis:
-        condition: service_healthy
-
-      # Local PostgreSQL is commented out because
-      # the worker now connects to Neon using DATABASE_URL.
-
-    restart: unless-stopped
-
-
-  # ============================================================
-  # FRONTEND
-  # ============================================================
-
-  frontend:
-    build: ./frontend
-
-    ports:
-      - "5173:5173"
-
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-
-    depends_on:
-      - backend
-
-    restart: unless-stopped
-
-
 # ============================================================
-# DOCKER VOLUMES
+# VOLUMES
 # ============================================================
 
 volumes:
-
-  # Local PostgreSQL volume is currently disabled because
-  # PostgreSQL is hosted by Neon.
-
-  # postgres_data:
-
-  # Redis still runs locally in Docker.
   redis_data:
-  # Shared PDF uploads between backend (writer) and worker (reader).
   uploads_data:

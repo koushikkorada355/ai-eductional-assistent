@@ -137,8 +137,8 @@ except Exception as e:
         "FATAL: missing required environment: "
         f"{', '.join(missing) if missing else e}. "
         f"Process env seen: {_env_presence_report()}. "
-        "Railway fix: Variables must be on THIS service (worker has its own Variables tab — "
-        "web vars do NOT flow to worker), same environment, then REDEPLOY (new vars need a new "
+        "Fix: Variables must be on THIS service (a split worker has its own Variables tab — "
+        "web vars do NOT flow to it), same environment, then REDEPLOY (new vars need a new "
         "deployment to reach the process). Best: link one shared env group to web+worker. "
         "Local fix: ensure .env exists (see .env.example)."
     )
@@ -149,6 +149,6 @@ except Exception as e:
 if not settings.SECRET_KEY or not settings.DATABASE_URL:
     logger.error(
         "FATAL: DATABASE_URL or SECRET_KEY is missing from environment! "
-        "Railway: copy both from web service Variables into worker Variables and redeploy."
+        "Fix: copy both into THIS service Variables (split worker needs its own copy) and redeploy."
     )
     sys.exit(1)

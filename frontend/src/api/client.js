@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const getBaseURL = () => {
-  // Production override wins (Vercel: VITE_API_BASE_URL=https://<railway>/api/v1).
+  // Production override wins (Vercel: VITE_API_BASE_URL=https://<render-service>.onrender.com/api/v1).
   // Vite bakes this in at build time — must be set in Vercel dashboard or
   // frontend/.env.production, otherwise Vercel previews would wrongly try
   // http://<vercel-host>:8000.

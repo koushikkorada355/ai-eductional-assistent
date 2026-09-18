@@ -28,16 +28,19 @@ Where to look: Materials list shows `error` under failed/queued docs; open **Vie
 
 ## Processing errors (doc created, status `failed`, reason under doc)
 
-| Reason (truncated) | Cause | Fix |
+Clients only ever see short coded messages (`[E_...]`, no URLs/paths/keys/API blobs) — the full reason stays in the server logs. Match the code below.
+
+| Reason (shown under doc) | Cause | Fix |
 |---|---|---|
-| `GOOGLE_API_KEY is not set on the worker...` | Embeddings key missing on worker. | Set same `GOOGLE_API_KEY` on web + worker, redeploy, **Retry**. |
-| `Upload file not found on worker (path=...)... mount the SAME Railway volume... UPLOAD_DIR=/data/uploads` | Web + worker don't share disk. | Mount same volume at `/data/uploads` in both services, set `UPLOAD_DIR=/data/uploads` on both, redeploy, **Retry**. |
+| `[E_AI_AUTH] AI service refused the request...` | Embeddings key missing/invalid on worker, or provider rejected the call. | Check keys in server logs, set same `GOOGLE_API_KEY` on web + worker, redeploy, **Retry**. |
+| `[E_STORAGE] Server storage had a problem...` | Web + worker don't share disk (upload file invisible to worker). | Mount same volume at `/data/uploads` in both services (single-container Render needs no setup), set `UPLOAD_DIR=/data/uploads` on both, redeploy, **Retry**. |
 | `Uploaded file is empty (0 bytes)...` | Empty file reached worker. | Re-upload. |
 | `PDF is password-protected...` | Encrypted PDF. | Remove password, re-upload. |
 | `Cannot open PDF (corrupt or not a real PDF)...` | Corrupt file. | Re-export, re-upload. |
 | `PDF has no pages.` | 0-page PDF. | Re-export, re-upload. |
 | `No extractable text found...` | Image-only scan with no OCR result. | Provide readable scan / text-layer PDF, **Retry**. |
-| `Embedding failed (check GOOGLE_API_KEY/quota)...` (names the chunk range) | Gemini key invalid / quota / network, or one giant request. Batches of 32 — only the failing batch is named. | Fix key/quota, **Retry**. |
+| `[E_AI_QUOTA] AI usage limit reached...` | Gemini free-tier quota exhausted (429). | Wait a minute, **Retry**. Persistent? Upgrade quota/billing. |
+| `[E_TIMEOUT] The request timed out...` / `[E_CONN] Could not reach...` | Provider network/timeout. | **Retry** in a moment. |
 | `PDF has N pages (max 300 per upload)...` / `produced N chunks (max 2000)...` | Doc too large for the worker (would OOM-crash it). | Split into smaller PDFs, upload each part. |
 | Worker service itself shows `Crashed`/restarts on upload | Out-of-memory (large scan, 300→200 DPI OCR renders, giant embedding call) or 10-min task limit. | Push latest code (batched embeddings, OCR cap 50 pages, 200 DPI, 300-page/2000-chunk caps, child recycled at ~350MB), redeploy worker with `--concurrency=1`, re-upload smaller parts, **Retry**. If exit was `137`/`OOMKilled`, it was memory — smaller PDFs confirm. |
 | `...background worker is unreachable (queue error: ...)` | Redis down / wrong `REDIS_URL` / worker offline. Upload tried async then inline; both failed. | See Queue errors. File is kept — **Retry** after fix. |
@@ -48,12 +51,17 @@ Where to look: Materials list shows `error` under failed/queued docs; open **Vie
 2. `REDIS_URL is not set` → set same internal URL on web + worker, restart **web** (Celery caches it at import), Retry.
 3. `does not resolve` + `redis://redis` → local hostname in prod. Copy Redis service **internal** URL into both, restart web, Retry.
 4. `auth failed` → copy full URL with password into both, restart web, Retry.
-5. `Redis ok but no workers` → worker service not Running (stopped, scaled to 0, crashed at boot, or on a different `REDIS_URL`). Start/scale it, fix its env, restart worker. Meanwhile **Retry** on a stuck doc processes it inline on web (~10–30s) so it still becomes `ready` instead of staying `queued`.
-6. Uploads prefer async Celery but fall back to inline in web (`_dispatch_or_process_inline`), so a dead Redis slows uploads (~10–30s) instead of stranding them — still fix Redis for speed. Retry additionally checks for listening workers and goes inline immediately when none reply.
+5. `Redis ok but no workers` → **no consumer is listening** (this is the classic "works local, queued-only in prod"). Check in order:
+   - **Render single-container (our setup):** Dashboard → service → **Dockerfile Path must be empty** (uses root `./Dockerfile` → `start-single.sh`) with **no custom Start/Docker Command override**. An override like `uvicorn ...` or building `backend/Dockerfile` starts web WITHOUT the Celery worker: uploads publish fine (Redis ok) but nobody consumes → `queued` forever. Fix: clear the override / Dockerfile path, redeploy.
+   - Deploy logs must show **both** `[single] starting celery worker` **and** `[WORKER] ready ... tasks(N): documents.process, ...`. Only uvicorn lines = no worker in the container.
+   - Split web+worker setup: worker must be Running (not stopped/scaled-to-0/crashed) on the SAME `REDIS_URL`.
+   - Meanwhile **re-upload or Retry**: both verify a listening worker first and process **inline on web** when none reply, so docs degrade to slower inline instead of staying `queued`.
+6. Uploads prefer async Celery but fall back to inline in web (`_dispatch_or_process_inline`), so a dead Redis/worker slows uploads (~10–30s) instead of stranding them — still fix Redis/worker for speed.
 
 ## Limits & notes
 
 - PDF only, max 25MB default (`MAX_UPLOAD_MB`), no duplicate content or filenames per project.
 - Retry is idempotent (clears old chunks, resets `error`); safe to press repeatedly.
 - Delete removes doc + chunks + file.
-- Railway checklist: same `REDIS_URL`, `GOOGLE_API_KEY`, `DATABASE_URL`, `SECRET_KEY` on web + worker; same `/data/uploads` volume + `UPLOAD_DIR`; redeploy both to same commit after env changes.
+- API responses never include the server file path (`DocumentOut` exposes `file_name` only).
+- Render checklist (single container): root `./Dockerfile` (empty Dockerfile Path), no Start Command override, disk at `/data/uploads` + `UPLOAD_DIR=/data/uploads`, `REDIS_URL` wired from Key Value service, same `GOOGLE_API_KEY`/`DATABASE_URL`/`SECRET_KEY` as before; redeploy after env changes.
