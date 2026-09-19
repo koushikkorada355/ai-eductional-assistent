@@ -1,91 +1,203 @@
 # AI Study Companion
 
-An AI-powered learning workspace: upload PDFs, learn with a grounded AI tutor, take adaptive quizzes, track concept mastery, and watch growth over time — with an admin mission-control dashboard on top.
+An app for learning from your own books. Upload books, ask the tutor, take quizzes, and see how you improve over time.
 
-**Learning loop:** Space → Project → Upload material → Tutor (cited answers) → Quiz → Mastery → Growth → Recommendations → Continue.
+Learning flow is simple. Make a space, make a project, upload a book, ask the tutor, take a quiz, check mastery, and keep learning.
+
+## Features
+
+Login and register with safe password storage and token based access.
+
+Spaces to group work and projects to group one subject with strict ownership.
+
+Book upload with background processing. Books are read page by page and made ready for search.
+
+AI tutor that answers only from your uploaded books with page reference and follow up questions.
+
+Quick actions for summary, deep study, flashcards, and practice questions.
+
+Concepts that show what you learned and how strong you are in each topic.
+
+Quizzes with choice questions and written questions. Quiz results update your mastery and history.
+
+Assignments for practice with instant score and feedback.
+
+Analytics for global progress and per project mastery, growth, and next steps.
+
+Admin view to see users, spaces, projects, activity, AI use, evaluation, jobs, and system health.
+
+Activity feed that records learning steps in simple words.
 
 ## Stack
 
-| Layer | Tech |
-|---|---|
-| Frontend | React 18 + Vite, Redux Toolkit, Framer Motion, Tailwind-style tokens |
-| Backend | FastAPI (Python 3.11), Pydantic validation, JWT (jose) + bcrypt auth |
-| AI | LangGraph tutor/quiz/assignment graphs; Inception Labs Mercury (OpenAI-compatible) for chat, Google Gemini embeddings (768-d) |
-| Retrieval | pgvector (cosine search, strictly project-filtered) |
-| Jobs | Celery + Redis (document ingest, quiz gen/grade, memory extraction) |
-| DB | PostgreSQL 15 + pgvector (`Base.metadata.create_all` on boot; no Alembic) |
+Frontend with React and Vite.
 
-## Quickstart
+State with Redux Toolkit.
 
-```bash
-# 1. Fill in keys (see Environment below) — .env is git-ignored, never commit it
-cp .env.example .env   # if present, otherwise create .ev from the table below
+Motion for smooth screens.
 
-# 2. Start everything
-docker compose up -d --build
+Backend with FastAPI and Python.
 
-# 3. Open the app
-# Frontend: http://localhost:5173   Backend health: http://localhost:8000/health
-```
+Input checks with Pydantic.
 
-Default admin account (seeded on boot, override via `ADMIN_*`): `admin@gmail.com` / `12345`.
+Login with JWT and bcrypt.
 
-Seed demo evaluation data (optional):
-```bash
-docker compose exec backend python scripts/seed_evaluation.py   # --force to reseed
-```
+AI flow with LangGraph for tutor and quiz steps.
 
-## Environment
+Search with pgvector inside Postgres.
 
-| Variable | Required | What |
-|---|---|---|
-| `DATABASE_URL` | yes | Postgres URL (compose default works) |
-| `SECRET_KEY` / `JWT_SECRET_KEY` | yes | JWT signing secret |
-| `INCEPTION_API_KEY` | yes | Chat LLM — https://platform.inceptionlabs.ai/dashboard/api-keys |
-| `INCEPTION_MODEL` | no | Default `mercury-2.5` |
-| `GOOGLE_API_KEY` | yes | Gemini embeddings (retrieval needs this) |
-| `REDIS_URL` | yes | Celery broker (compose default works) |
-| `GROQ_API_KEY` / `GROQ_MODEL` | no | Disabled fallback — uncomment in code + `.env` to switch back |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | no | Seeded admin account |
-| `LANGCHAIN_*` | no | LangSmith tracing passthrough |
+Background jobs with Celery and Redis.
 
-## Repo layout
+Database with Postgres and pgvector.
 
-```
-backend/
-  app/api/v1/        # REST routers: auth, spaces, projects, tutor, materials,
-                     # quiz (+quiz_flat batch flow), mastery, assignment, analytics, admin
-  app/ai/            # llm.py (provider switch), graphs/, nodes/, actions.py (quick actions),
-                     # mastery_engine.py, concept_extractor.py, prompts.py
-  app/tasks/         # Celery: documents, concepts, quiz, assignments, learning, analytics
-  app/services/      # ai_usage metering, analytics/growth math, learning memory, assignments
-  app/db/models/     # users, spaces, projects, documents+chunks, chat, assessment,
-                     # mastery(+history), learning, ai_usage
-  scripts/           # seed_evaluation.py, attribute_concept_sources.py
-frontend/src/
-  pages/             # Auth, Spaces, ProjectWorkspace (Materials, Concepts, AI Tutor,
-                     # Quiz, Assignments, Analytics), GlobalAnalytics, Admin
-  features/          # Redux slices: auth, project, tutor, quiz, assignments, concepts, analytics
-  components/        # ui, Sidebar, Navbar, icons, ConfirmModal
-  api/client.js      # axios client (LAN-aware base URL)
-```
+Logs in plain text for easy debug.
 
-## Key flows
+## Models used
 
-- **Tutor turn** (`POST …/conversations/{id}/tutor`): intent classify → RAG retrieve (top-5 chunks, this project only) → evidence grade → answer with `[Source: Page N]` citations → follow-ups. Quick actions (`summarize`, `deep_dive`, `create_flashcards`, `practice`) reuse the same pipeline with different directives; practice renders MCQs inline and never touches mastery. Greetings/small-talk never trigger generations.
-- **Quiz**: batch generate (configurable MCQ + open mix) → save answers → submit → strict LLM grading with retries → mastery updates (70/30 blend) + history snapshots.
-- **Mastery & growth**: `Concept.mastery_level` + append-only `MasteryHistory` (idempotent) → per-concept/project growth (improving/stable/attention) + rule-based recommendations.
-- **Admin** (`/admin`, admin role): users + learning journey, spaces/projects, activity feed with filters, AI usage metering (calls/tokens/cost/latency per feature×provider×model×day), AI evaluation (tutor quality, retrieval grounding, assessment, recommendations), job states, system health.
-- **Background work**: uploads, quiz gen/grade, concept extraction, conversation summaries, and memory extraction all run on Celery with retries; the UI polls status.
+Chat with Inception Mercury. Model is mercury 2.5. Used for tutor answers, quiz questions, assignments, and follow up ideas.
 
-## Ports (docker-compose)
+Backup chat with Groq. Used only when main chat key is not set.
 
-`5173` frontend · `8000` backend · `5433` postgres · `6379` redis.
+Search vectors with Google Gemini embeddings. Used to find the right part of the book for tutor, quiz, and concepts.
 
-## Known limitations (prototype)
+Tracing with LangSmith when keys are set. Used to check what the AI did.
 
-- PDF text extraction only (PyMuPDF) — scanned/image pages yield no chunks; OCR path is stubbed out.
-- No response streaming, no app-level caching, no pagination on some lists.
-- Tutor turn has endpoint-level provider-error mapping but no per-node retry; no Alembic migrations.
-- Quiz adaptivity is mastery-ordered batch generation (the one-question-at-a-time adaptive graph exists but isn't wired to UI).
-- No voice, spaced repetition, notifications, or collaboration.
+Text reading for scanned books with Tesseract OCR as fallback.
+
+## What you need before start
+
+You need Docker and Docker Compose for easy run.
+
+You need a Postgres database url. Local default from compose also works.
+
+You need a Redis url. Local default from compose also works.
+
+You need a chat key for Inception Mercury for tutor and quiz.
+
+You need an embedding key for Google Gemini for search. Without this, book search will not work.
+
+Optional Groq key as backup chat. Optional LangSmith keys for tracing.
+
+## How to run
+
+Copy the example env file to env and fill the keys. Never commit the real env file.
+
+Build and start all services with docker compose up with build in detached mode.
+
+Open the frontend in browser on port 5173.
+
+Check backend health on port 8000 with health path. It should say healthy.
+
+Check queue health on health queue path to see Redis and worker status.
+
+Stop all services with docker compose down when done.
+
+## Admin login
+
+The admin account is created on startup if it does not exist.
+
+Email is admin@gmail.com and password is 12345.
+
+You can change it with admin email, admin password, and admin name in env. If you change it, restart the app.
+
+Only admin role can open the admin page. Normal users are sent back to home.
+
+## How to use as a student
+
+Register a new account and login.
+
+Make a space like exam name or semester. Make a project like subject name inside it.
+
+Open the project and go to materials. Upload a PDF book and wait till status becomes ready. If it fails, read the reason and press retry.
+
+Open concepts to see key topics found from your book and your current level.
+
+Open AI tutor to ask questions. Ask clearly from book topics. You will get an answer with page reference. Click follow up chips to learn more.
+
+Use quick actions when you want a fast summary or practice set.
+
+Open quiz to start a test. Choose count and type. Answer all questions and submit. Check score, feedback, and review.
+
+Open assignments for extra practice. Submit once and see instant result.
+
+Open analytics to see mastery bars, growth, quiz trend, and what to study next.
+
+Use the home page to continue recent work and the global analytics page to see full progress.
+
+## How to use as an admin
+
+Login with the admin account and open the admin page.
+
+See total users, projects, books, quizzes, and system health at the top.
+
+Open users to search, list, and see one user journey with spaces, scores, and events.
+
+Open spaces and projects to see all work across users with owner info.
+
+Open activity to see learning events with filters by type and user.
+
+Open AI usage to see calls, tokens, cost, and time per feature and model per day.
+
+Open evaluation to see tutor quality, search grounding, and quiz results in simple form.
+
+Open jobs to see worker status and recent failures.
+
+Open health to see database, Redis, AI keys, and storage status.
+
+## Demo data
+
+You can seed demo evaluation data for testing dashboards and charts.
+
+Run the seed script inside the backend container. Use force flag to reseed if needed.
+
+This helps to see admin charts without manual uploads.
+
+## Keys you need in detail
+
+You need a database url for Postgres. This is required.
+
+You need a secret key for login tokens. This is required. You can also use JWT secret key name.
+
+You need a chat key for Inception Mercury. The model is mercury 2.5. This is required for tutor and quiz.
+
+You need an embedding key for Google Gemini. It is needed for search. Without this, uploads will fail.
+
+You need a Redis url for background jobs. This is required. Web and worker must use the same value.
+
+You need frontend url for production to allow safe access. Local use works without it.
+
+You can set upload folder path and max upload size in MB. Default is fine for local use.
+
+Groq key is optional as backup. LangSmith keys are optional for tracing. OCR key is optional. Tesseract is used as fallback.
+
+## Ports and services
+
+Frontend runs on port 5173.
+
+Backend runs on port 8000.
+
+Postgres runs on port 5433 in local compose.
+
+Redis runs on port 6379 in local compose.
+
+## Health and debug
+
+If uploads stay in queued for long, check queue health first.
+
+It tells if Redis is down, if the URL is wrong, or if no worker is running.
+
+Web and worker must share the same Redis url and the same upload storage. After changing env, restart the service and redeploy.
+
+If a book fails, the reason is shown in materials. Common reasons are scanned images with no text, too many pages, quota over, or missing keys. Full details stay in server logs.
+
+If the tutor says no proof, upload more books on that topic or ask in a narrower way.
+
+## Safety and privacy
+
+Each user can see only their own spaces and projects.
+
+Search is strictly filtered by project. No cross project data is shared.
+
+Raw provider errors are not sent to users. Users see only short safe messages.
+
+Real env file is ignored by git. Never share keys in chat or screenshots.
